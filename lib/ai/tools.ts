@@ -8,7 +8,9 @@ import {
 import { budgetProgress } from "@/lib/db/budget-queries";
 import { analyzeRewards, type RewardWindow } from "@/lib/rewards/compute";
 import { formatCents } from "@/lib/money";
-import { humanizeCategory } from "@/lib/category";
+import { humanizeCategory, PFC_PRIMARIES } from "@/lib/category";
+
+const categoryEnum = z.enum(PFC_PRIMARIES);
 
 /**
  * Whitelisted, read-only tools the Q&A agent may call. The model never writes
@@ -64,23 +66,42 @@ const TOOLS: Tool[] = [
   {
     name: "get_top_merchants",
     description:
-      "Top merchants by total spend, optionally within a category (pass the pfc_primary code) and/or date range.",
+      "Top merchants by total spend, optionally within a category and/or a subcategory and/or a date range. To find a top RESTAURANT, use category FOOD_AND_DRINK with subcategory FOOD_AND_DRINK_RESTAURANT (dining also includes FOOD_AND_DRINK_FAST_FOOD and FOOD_AND_DRINK_COFFEE).",
     parameters: {
       type: "object",
       properties: {
-        category: { type: "string", description: "pfc_primary code, e.g. FOOD_AND_DRINK" },
+        category: { type: "string", enum: [...PFC_PRIMARIES], description: "pfc_primary code" },
+        subcategory: {
+          type: "string",
+          description: "pfc_detailed code to narrow further, e.g. FOOD_AND_DRINK_RESTAURANT",
+        },
         from: { type: "string", description: "start date YYYY-MM-DD" },
         to: { type: "string", description: "end date YYYY-MM-DD" },
         limit: { type: "number", description: "max merchants (default 10)" },
       },
     },
-    schema: z.object({ category: z.string().optional(), ...dateRange, limit: z.number().optional() }),
+    schema: z.object({
+      category: categoryEnum.optional(),
+      subcategory: z.string().optional(),
+      ...dateRange,
+      limit: z.number().optional(),
+    }),
     run: async (args) => {
       const a = z
-        .object({ category: z.string().optional(), ...dateRange, limit: z.number().optional() })
+        .object({
+          category: categoryEnum.optional(),
+          subcategory: z.string().optional(),
+          ...dateRange,
+          limit: z.number().optional(),
+        })
         .parse(args);
       const rows = await topMerchants(
-        { category: a.category, from: parseDate(a.from), to: parseDate(a.to, true) },
+        {
+          category: a.category,
+          detailed: a.subcategory,
+          from: parseDate(a.from),
+          to: parseDate(a.to, true),
+        },
         Math.min(a.limit ?? 10, 25),
       );
       return rows.map((r) => ({ merchant: r.merchant, total: formatCents(r.totalCents), visits: r.count }));
@@ -95,25 +116,34 @@ const TOOLS: Tool[] = [
       properties: {
         from: { type: "string", description: "start date YYYY-MM-DD" },
         to: { type: "string", description: "end date YYYY-MM-DD" },
-        category: { type: "string", description: "pfc_primary code" },
+        category: { type: "string", enum: [...PFC_PRIMARIES], description: "pfc_primary code" },
+        subcategory: { type: "string", description: "pfc_detailed code, e.g. FOOD_AND_DRINK_RESTAURANT" },
         search: { type: "string", description: "merchant/name substring" },
         limit: { type: "number", description: "max rows (default 20)" },
       },
     },
     schema: z.object({
       ...dateRange,
-      category: z.string().optional(),
+      category: categoryEnum.optional(),
+      subcategory: z.string().optional(),
       search: z.string().optional(),
       limit: z.number().optional(),
     }),
     run: async (args) => {
       const a = z
-        .object({ ...dateRange, category: z.string().optional(), search: z.string().optional(), limit: z.number().optional() })
+        .object({
+          ...dateRange,
+          category: categoryEnum.optional(),
+          subcategory: z.string().optional(),
+          search: z.string().optional(),
+          limit: z.number().optional(),
+        })
         .parse(args);
       const rows = await listTransactions({
         from: parseDate(a.from),
         to: parseDate(a.to, true),
         category: a.category,
+        detailed: a.subcategory,
         search: a.search,
         limit: Math.min(a.limit ?? 20, 50),
       });

@@ -195,6 +195,7 @@ export interface TxnFilter {
   to?: Date;
   accountId?: string;
   category?: string;
+  detailed?: string;
   search?: string;
   limit?: number;
   offset?: number;
@@ -217,6 +218,7 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
   if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.detailed) clauses.push(eq(transactions.pfcDetailed, f.detailed));
   if (f.search) {
     const q = `%${f.search}%`;
     clauses.push(sql`(${ilike(transactions.name, q)} or ${ilike(transactions.merchantName, q)})`);
@@ -398,13 +400,14 @@ export async function spendingFingerprint(f: SpendingFilter = {}): Promise<strin
 
 /** Top merchants by spend, optionally scoped to a category, for the AI agent. */
 export async function topMerchants(
-  f: SpendingFilter & { category?: string } = {},
+  f: SpendingFilter & { category?: string; detailed?: string } = {},
   limit = 10,
 ): Promise<MerchantSpend[]> {
   const clauses: SQL[] = [];
   const base = spendingWhere(f);
   if (base) clauses.push(base);
   if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.detailed) clauses.push(eq(transactions.pfcDetailed, f.detailed));
 
   const rows = await db
     .select({

@@ -22,7 +22,9 @@ function systemPrompt(): string {
 Today is ${today}.
 
 - Use the provided tools to fetch data before answering. Prefer the most specific tool.
-- Category arguments use Plaid pfc_primary codes (e.g. FOOD_AND_DRINK); call get_spending_by_category first to discover codes if unsure.
+- Category arguments MUST be one of these exact pfc_primary codes: INCOME, TRANSFER_IN, TRANSFER_OUT, LOAN_PAYMENTS, BANK_FEES, ENTERTAINMENT, FOOD_AND_DRINK, GENERAL_MERCHANDISE, HOME_IMPROVEMENT, MEDICAL, PERSONAL_CARE, GENERAL_SERVICES, GOVERNMENT_AND_NON_PROFIT, TRANSPORTATION, TRAVEL, RENT_AND_UTILITIES. Do not invent codes (there is no "FOOD_SERVICE").
+- "Restaurant" / "dining" = category FOOD_AND_DRINK; to exclude groceries, narrow with subcategory FOOD_AND_DRINK_RESTAURANT (dining also covers FOOD_AND_DRINK_FAST_FOOD and FOOD_AND_DRINK_COFFEE). Groceries are FOOD_AND_DRINK_GROCERIES.
+- If a tool errors or returns nothing, reconsider your arguments and try again before concluding there's no data.
 - Only state numbers returned by tools. NEVER invent or estimate figures. If the tools don't have it, say so.
 - Be concise and direct. Lead with the answer, then a brief supporting detail.`;
 }

@@ -1,3 +1,23 @@
+/** All Plaid personal_finance_category primary codes. */
+export const PFC_PRIMARIES = [
+  "INCOME",
+  "TRANSFER_IN",
+  "TRANSFER_OUT",
+  "LOAN_PAYMENTS",
+  "BANK_FEES",
+  "ENTERTAINMENT",
+  "FOOD_AND_DRINK",
+  "GENERAL_MERCHANDISE",
+  "HOME_IMPROVEMENT",
+  "MEDICAL",
+  "PERSONAL_CARE",
+  "GENERAL_SERVICES",
+  "GOVERNMENT_AND_NON_PROFIT",
+  "TRANSPORTATION",
+  "TRAVEL",
+  "RENT_AND_UTILITIES",
+] as const;
+
 /** Plaid PFC primary categories suitable for budgeting (consumption only —
  *  excludes income, transfers, and loan payments). */
 export const BUDGETABLE_CATEGORIES = [
