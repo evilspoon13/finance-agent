@@ -1,6 +1,10 @@
 import { and, gte, lte, eq, ilike, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "./client";
-import { accounts, transactions, holdings, type Account } from "./schema";
+import { accounts, transactions, holdings, cards, type Account } from "./schema";
+
+/** Friendly display name for an account: the seeded card label if linked, else
+ *  the (sometimes generic) Plaid account name. */
+const displayName = sql<string>`coalesce(${cards.label}, ${accounts.name})`;
 
 /**
  * Read-only analytics for the dashboard: net worth, spending breakdowns, and a
@@ -46,6 +50,11 @@ export interface NetWorth {
 export async function getNetWorth(): Promise<NetWorth> {
   const accts = await db.select().from(accounts);
 
+  // Friendly labels for accounts linked to a rewards card.
+  const cardRows = await db.select({ accountId: cards.accountId, label: cards.label }).from(cards);
+  const labelByAccount = new Map<string, string>();
+  for (const r of cardRows) if (r.accountId) labelByAccount.set(r.accountId, r.label);
+
   // Sum holdings market value per investment account.
   const holdingsByAccount = new Map<string, number>();
   const hRows = await db
@@ -76,7 +85,7 @@ export async function getNetWorth(): Promise<NetWorth> {
     } else {
       continue; // ignore unclassified accounts
     }
-    lines.push({ accountId: a.id, name: a.name, klass, valueCents: value });
+    lines.push({ accountId: a.id, name: labelByAccount.get(a.id) ?? a.name, klass, valueCents: value });
   }
 
   lines.sort((x, y) => y.valueCents - x.valueCents);
@@ -169,13 +178,14 @@ export async function spendingByAccount(f: SpendingFilter = {}): Promise<Account
   const rows = await db
     .select({
       accountId: transactions.accountId,
-      name: accounts.name,
+      name: displayName,
       totalCents: sql<number>`sum(${transactions.amountCents})::int`,
     })
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
+    .leftJoin(cards, eq(cards.accountId, transactions.accountId))
     .where(spendingWhere(f))
-    .groupBy(transactions.accountId, accounts.name)
+    .groupBy(transactions.accountId, accounts.name, cards.label)
     .orderBy(sql`sum(${transactions.amountCents}) desc`);
   return rows.map((r) => ({ accountId: r.accountId, name: r.name, totalCents: r.totalCents ?? 0 }));
 }
@@ -218,13 +228,14 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
       postedAt: transactions.postedAt,
       name: transactions.name,
       merchantName: transactions.merchantName,
-      accountName: accounts.name,
+      accountName: displayName,
       category: transactions.pfcPrimary,
       amountCents: transactions.amountCents,
       pending: transactions.pending,
     })
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
+    .leftJoin(cards, eq(cards.accountId, transactions.accountId))
     .where(clauses.length ? and(...clauses) : undefined)
     .orderBy(desc(transactions.postedAt))
     .limit(f.limit ?? 100)
@@ -250,7 +261,11 @@ export async function countTransactions(f: TxnFilter = {}): Promise<number> {
   return row?.n ?? 0;
 }
 
-/** Distinct accounts for filter dropdowns. */
+/** Distinct accounts for filter dropdowns (friendly names). */
 export async function listAccountsForFilter(): Promise<Pick<Account, "id" | "name">[]> {
-  return db.select({ id: accounts.id, name: accounts.name }).from(accounts).orderBy(accounts.name);
+  return db
+    .select({ id: accounts.id, name: displayName })
+    .from(accounts)
+    .leftJoin(cards, eq(cards.accountId, accounts.id))
+    .orderBy(accounts.name);
 }

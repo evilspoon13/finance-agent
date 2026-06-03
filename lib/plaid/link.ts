@@ -39,14 +39,17 @@ export async function createLinkToken(): Promise<string> {
  * re-authentication (ITEM_LOGIN_REQUIRED). Used by the reconnect flow.
  */
 export async function createUpdateLinkToken(accessToken: string): Promise<string> {
-  const { PLAID_WEBHOOK_URL } = plaidEnv();
+  const { PLAID_WEBHOOK_URL, PLAID_REDIRECT_URI } = plaidEnv();
   const res = await plaid().linkTokenCreate({
     user: { client_user_id: clientUserId() },
     client_name: "Finance Aggregator",
     country_codes: [CountryCode.Us],
     language: "en",
     access_token: accessToken,
+    // Re-request the full history window so reconnecting backfills older data.
+    transactions: { days_requested: 730 },
     ...(PLAID_WEBHOOK_URL ? { webhook: PLAID_WEBHOOK_URL } : {}),
+    ...(PLAID_REDIRECT_URI ? { redirect_uri: PLAID_REDIRECT_URI } : {}),
   });
   return res.data.link_token;
 }

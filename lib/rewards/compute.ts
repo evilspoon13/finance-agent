@@ -113,7 +113,19 @@ const EMPTY_REPORT: RewardsReport = {
   hasCards: false,
 };
 
-async function analyze(): Promise<Analysis> {
+export interface RewardWindow {
+  from?: Date;
+  to?: Date;
+}
+
+function inWindow(d: Date | null, w?: RewardWindow): boolean {
+  if (!w) return true;
+  if (w.from && (!d || d < w.from)) return false;
+  if (w.to && (!d || d > w.to)) return false;
+  return true;
+}
+
+async function analyze(window?: RewardWindow): Promise<Analysis> {
   const { cards, accountToCardId, cardById } = await loadCards();
   // No cards seeded yet (e.g. before the first sync): nothing to compute.
   if (cards.length === 0) return { results: [], report: EMPTY_REPORT };
@@ -150,27 +162,31 @@ async function analyze(): Promise<Analysis> {
 
     results.push({ id: t.id, optimalCardId: best.cardId, deltaCents: delta });
 
-    // Per-card earned (value actually earned on the card used).
-    if (actualCardId) {
-      const agg = earnedByCard.get(actualCardId) ?? { cents: 0, count: 0 };
-      agg.cents += actualValue;
-      agg.count += 1;
-      earnedByCard.set(actualCardId, agg);
-      totalEarned += actualValue;
-    }
+    // Aggregate only within the requested window (the chronological pass and
+    // persisted results above always cover all history for cap correctness).
+    if (inWindow(t.postedAt, window)) {
+      // Per-card earned (value actually earned on the card used).
+      if (actualCardId) {
+        const agg = earnedByCard.get(actualCardId) ?? { cents: 0, count: 0 };
+        agg.cents += actualValue;
+        agg.count += 1;
+        earnedByCard.set(actualCardId, agg);
+        totalEarned += actualValue;
+      }
 
-    // Missed: a different card would have beaten the one used.
-    if (delta > 0 && best.cardId !== actualCardId) {
-      totalMissed += delta;
-      missed.push({
-        id: t.id,
-        postedAt: t.postedAt,
-        label: t.merchantName ?? t.name,
-        amountCents: t.amountCents,
-        actualLabel: actualCard?.label ?? "Non-card account",
-        optimalLabel: cardById.get(best.cardId)?.label ?? best.cardId,
-        deltaCents: delta,
-      });
+      // Missed: a different card would have beaten the one used.
+      if (delta > 0 && best.cardId !== actualCardId) {
+        totalMissed += delta;
+        missed.push({
+          id: t.id,
+          postedAt: t.postedAt,
+          label: t.merchantName ?? t.name,
+          amountCents: t.amountCents,
+          actualLabel: actualCard?.label ?? "Non-card account",
+          optimalLabel: cardById.get(best.cardId)?.label ?? best.cardId,
+          deltaCents: delta,
+        });
+      }
     }
 
     // Consume the cap from actual Discover-card spend in active categories.
@@ -238,9 +254,10 @@ function buildGuide(cards: CardDef[], cardById: Map<string, CardDef>): GuideRow[
   });
 }
 
-/** Read-only: compute the dashboard report without touching stored columns. */
-export async function analyzeRewards(): Promise<RewardsReport> {
-  return (await analyze()).report;
+/** Read-only: compute the dashboard report (optionally scoped to a date window)
+ *  without touching stored columns. */
+export async function analyzeRewards(window?: RewardWindow): Promise<RewardsReport> {
+  return (await analyze(window)).report;
 }
 
 /** Compute and persist optimal_card_id + reward_delta_cents for every purchase. */

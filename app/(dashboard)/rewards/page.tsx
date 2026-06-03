@@ -1,13 +1,33 @@
+import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
-import { analyzeRewards } from "@/lib/rewards/compute";
+import { analyzeRewards, type RewardWindow } from "@/lib/rewards/compute";
 import { quarterKey, discoverCategoriesFor, MILES_VALUE_CENTS } from "@/lib/rewards/config";
 import { formatCents } from "@/lib/money";
 import { humanizeCategory } from "@/lib/category";
+import type { RawSearchParams } from "@/lib/filters";
 
 export const dynamic = "force-dynamic";
 
-export default async function RewardsPage() {
-  const report = await analyzeRewards();
+type WindowKey = "month" | "quarter" | "all";
+
+function windowFor(key: WindowKey): RewardWindow | undefined {
+  const now = new Date();
+  if (key === "month") {
+    return { from: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)) };
+  }
+  if (key === "quarter") {
+    const q = Math.floor(now.getUTCMonth() / 3) * 3;
+    return { from: new Date(Date.UTC(now.getUTCFullYear(), q, 1)) };
+  }
+  return undefined;
+}
+
+export default async function RewardsPage(props: { searchParams: Promise<RawSearchParams> }) {
+  const sp = await props.searchParams;
+  const rawWindow = Array.isArray(sp.window) ? sp.window[0] : sp.window;
+  const windowKey: WindowKey = rawWindow === "month" || rawWindow === "quarter" ? rawWindow : "all";
+
+  const report = await analyzeRewards(windowFor(windowKey));
   const now = new Date();
   const activeCats = discoverCategoriesFor(now);
 
@@ -28,15 +48,35 @@ export default async function RewardsPage() {
         activeCats.length ? activeCats.map((c) => humanizeCategory(c)).join(", ") : "not announced"
       }. Miles valued at ${MILES_VALUE_CENTS}¢.`}
     >
+      <div className="mb-4 flex flex-wrap gap-2 text-xs">
+        {(["month", "quarter", "all"] as const).map((k) => {
+          const label = k === "month" ? "This month" : k === "quarter" ? "This quarter" : "All time";
+          const active = k === windowKey;
+          return (
+            <Link
+              key={k}
+              href={k === "all" ? "/rewards" : `/rewards?window=${k}`}
+              className={`rounded-full border px-3 py-1 ${
+                active
+                  ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                  : "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              }`}
+            >
+              {label}
+            </Link>
+          );
+        })}
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-          <div className="text-xs uppercase tracking-wide text-zinc-500">Value earned (all time)</div>
+          <div className="text-xs uppercase tracking-wide text-zinc-500">Value earned</div>
           <div className="mt-1 text-3xl font-semibold tabular-nums">
             {formatCents(report.totalEarnedCents)}
           </div>
         </div>
         <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-          <div className="text-xs uppercase tracking-wide text-zinc-500">Missed rewards (all time)</div>
+          <div className="text-xs uppercase tracking-wide text-zinc-500">Missed rewards</div>
           <div className="mt-1 text-3xl font-semibold tabular-nums text-amber-600 dark:text-amber-400">
             {formatCents(report.totalMissedCents)}
           </div>

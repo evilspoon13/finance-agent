@@ -22,40 +22,57 @@ export default async function NetWorthPage() {
         <Stat label="Liabilities" cents={-nw.liabilitiesCents} />
       </div>
 
-      <div className="mt-8 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-        <table className="w-full text-sm">
-          <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
-            <tr>
-              <th className="px-4 py-2 font-medium">Account</th>
-              <th className="px-4 py-2 font-medium">Type</th>
-              <th className="px-4 py-2 text-right font-medium">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {nw.lines.length === 0 ? (
-              <tr>
-                <td colSpan={3} className="px-4 py-8 text-center text-zinc-500">
-                  No accounts yet — link one on the Connections page.
-                </td>
-              </tr>
-            ) : (
-              nw.lines.map((line) => (
-                <tr key={line.accountId} className="border-t border-zinc-100 dark:border-zinc-800">
-                  <td className="px-4 py-2">{line.name}</td>
-                  <td className="px-4 py-2 text-zinc-500">{CLASS_LABEL[line.klass]}</td>
-                  <td
-                    className={`px-4 py-2 text-right tabular-nums ${
-                      line.valueCents < 0 ? "text-red-600 dark:text-red-400" : ""
+      {nw.lines.length === 0 ? (
+        <p className="mt-8 rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
+          No accounts yet — link one on the Connections page.
+        </p>
+      ) : (
+        <div className="mt-8 space-y-6">
+          {(["cash", "investment", "liability", "other"] as const).map((klass) => {
+            const group = nw.lines.filter((l) => l.klass === klass);
+            if (group.length === 0) return null;
+            const subtotal = group.reduce((n, l) => n + l.valueCents, 0);
+            return (
+              <div
+                key={klass}
+                className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800"
+              >
+                <div className="flex items-center justify-between bg-zinc-50 px-4 py-2 dark:bg-zinc-900">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    {CLASS_LABEL[klass]}
+                  </span>
+                  <span
+                    className={`text-sm font-medium tabular-nums ${
+                      subtotal < 0 ? "text-red-600 dark:text-red-400" : ""
                     }`}
                   >
-                    {formatCents(line.valueCents)}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                    {formatCents(subtotal)}
+                  </span>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {group.map((line) => (
+                      <tr
+                        key={line.accountId}
+                        className="border-t border-zinc-100 dark:border-zinc-800"
+                      >
+                        <td className="px-4 py-2">{line.name}</td>
+                        <td
+                          className={`px-4 py-2 text-right tabular-nums ${
+                            line.valueCents < 0 ? "text-red-600 dark:text-red-400" : ""
+                          }`}
+                        >
+                          {formatCents(line.valueCents)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </PageShell>
   );
 }

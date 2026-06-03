@@ -126,3 +126,7 @@ export async function setItemStatusByPlaidId(
     .set({ status, updatedAt: new Date() })
     .where(eq(items.plaidItemId, plaidItemId));
 }
+
+export async function setItemStatusById(id: string, status: Item["status"]): Promise<void> {
+  await db.update(items).set({ status, updatedAt: new Date() }).where(eq(items.id, id));
+}
