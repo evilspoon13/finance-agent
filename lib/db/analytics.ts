@@ -232,6 +232,24 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
   return rows;
 }
 
+/** Count of transactions matching a filter (for pagination). */
+export async function countTransactions(f: TxnFilter = {}): Promise<number> {
+  const clauses: SQL[] = [];
+  if (f.from) clauses.push(gte(transactions.postedAt, f.from));
+  if (f.to) clauses.push(lte(transactions.postedAt, f.to));
+  if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
+  if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.search) {
+    const q = `%${f.search}%`;
+    clauses.push(sql`(${ilike(transactions.name, q)} or ${ilike(transactions.merchantName, q)})`);
+  }
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(transactions)
+    .where(clauses.length ? and(...clauses) : undefined);
+  return row?.n ?? 0;
+}
+
 /** Distinct accounts for filter dropdowns. */
 export async function listAccountsForFilter(): Promise<Pick<Account, "id" | "name">[]> {
   return db.select({ id: accounts.id, name: accounts.name }).from(accounts).orderBy(accounts.name);

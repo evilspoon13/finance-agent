@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
 import { FilterBar } from "@/components/FilterBar";
 import {
@@ -32,8 +33,18 @@ export default async function SpendingPage(props: {
     <PageShell title="Spending" subtitle="By category, month, and account. Outflows only.">
       <FilterBar accounts={accountOpts.map((a) => ({ value: a.id, label: a.name }))} />
 
+      <RangePresets account={f.accountId} />
+
       <div className="mb-6 text-sm text-zinc-500">
-        Total spending in range: <span className="font-medium text-foreground">{formatCents(total)}</span>
+        {f.from || f.to ? (
+          <>
+            Range: {f.from ? f.from.toISOString().slice(0, 10) : "earliest"} —{" "}
+            {f.to ? f.to.toISOString().slice(0, 10) : "today"}.{" "}
+          </>
+        ) : (
+          <>Range: all time. </>
+        )}
+        Total spending: <span className="font-medium text-foreground">{formatCents(total)}</span>
       </div>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
@@ -115,4 +126,45 @@ export default async function SpendingPage(props: {
 
 function Empty() {
   return <p className="text-sm text-zinc-500">No spending in this range.</p>;
+}
+
+function iso(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Quick date-range presets that preserve the account filter. */
+function RangePresets({ account }: { account?: string }) {
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const last3 = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, now.getUTCDate()));
+  const last12 = new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), now.getUTCDate()));
+
+  const presets: { label: string; from?: string }[] = [
+    { label: "This month", from: iso(monthStart) },
+    { label: "Last 3 months", from: iso(last3) },
+    { label: "Last 12 months", from: iso(last12) },
+    { label: "All time" },
+  ];
+
+  function href(from?: string): string {
+    const p = new URLSearchParams();
+    if (account) p.set("account", account);
+    if (from) p.set("from", from);
+    const qs = p.toString();
+    return qs ? `/spending?${qs}` : "/spending";
+  }
+
+  return (
+    <div className="mb-4 flex flex-wrap gap-2 text-xs">
+      {presets.map((p) => (
+        <Link
+          key={p.label}
+          href={href(p.from)}
+          className="rounded-full border border-zinc-300 px-3 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          {p.label}
+        </Link>
+      ))}
+    </div>
+  );
 }

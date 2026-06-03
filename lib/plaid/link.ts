@@ -24,6 +24,8 @@ export async function createLinkToken(): Promise<string> {
     // / "institution not supported".
     products: [Products.Transactions],
     required_if_supported_products: [Products.Investments],
+    // Request the maximum transaction history (default is only ~90 days).
+    transactions: { days_requested: 730 },
     country_codes: [CountryCode.Us],
     language: "en",
     ...(PLAID_WEBHOOK_URL ? { webhook: PLAID_WEBHOOK_URL } : {}),
