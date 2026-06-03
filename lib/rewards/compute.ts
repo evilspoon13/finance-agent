@@ -104,8 +104,20 @@ interface Analysis {
   report: RewardsReport;
 }
 
+const EMPTY_REPORT: RewardsReport = {
+  perCard: [],
+  missed: [],
+  guide: [],
+  totalEarnedCents: 0,
+  totalMissedCents: 0,
+  hasCards: false,
+};
+
 async function analyze(): Promise<Analysis> {
   const { cards, accountToCardId, cardById } = await loadCards();
+  // No cards seeded yet (e.g. before the first sync): nothing to compute.
+  if (cards.length === 0) return { results: [], report: EMPTY_REPORT };
+
   const purchases = await loadPurchases();
 
   const discoverCard = cards.find((c) => c.earnRules.kind === "rotating");
