@@ -28,6 +28,10 @@ const plaidSchema = z.object({
   PLAID_SECRET: z.string().min(1, "PLAID_SECRET is required"),
   PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   PLAID_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
+  // Registered OAuth redirect URI (required for production OAuth institutions
+  // like Chase/Capital One). Must exactly match a URI allowlisted in the Plaid
+  // dashboard, e.g. https://<tunnel>/connections.
+  PLAID_REDIRECT_URI: z.string().url().optional().or(z.literal("")),
 });
 
 export type CoreEnv = z.infer<typeof coreSchema>;

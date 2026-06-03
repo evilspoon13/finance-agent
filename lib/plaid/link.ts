@@ -14,7 +14,7 @@ function clientUserId(): string {
 }
 
 export async function createLinkToken(): Promise<string> {
-  const { PLAID_WEBHOOK_URL } = plaidEnv();
+  const { PLAID_WEBHOOK_URL, PLAID_REDIRECT_URI } = plaidEnv();
   const res = await plaid().linkTokenCreate({
     user: { client_user_id: clientUserId() },
     client_name: "Finance Aggregator",
@@ -22,6 +22,7 @@ export async function createLinkToken(): Promise<string> {
     country_codes: [CountryCode.Us],
     language: "en",
     ...(PLAID_WEBHOOK_URL ? { webhook: PLAID_WEBHOOK_URL } : {}),
+    ...(PLAID_REDIRECT_URI ? { redirect_uri: PLAID_REDIRECT_URI } : {}),
   });
   return res.data.link_token;
 }
