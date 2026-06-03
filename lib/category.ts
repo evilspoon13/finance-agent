@@ -1,3 +1,19 @@
+/** Plaid PFC primary categories suitable for budgeting (consumption only —
+ *  excludes income, transfers, and loan payments). */
+export const BUDGETABLE_CATEGORIES = [
+  "FOOD_AND_DRINK",
+  "GENERAL_MERCHANDISE",
+  "TRANSPORTATION",
+  "TRAVEL",
+  "ENTERTAINMENT",
+  "GENERAL_SERVICES",
+  "PERSONAL_CARE",
+  "MEDICAL",
+  "HOME_IMPROVEMENT",
+  "RENT_AND_UTILITIES",
+  "GOVERNMENT_AND_NON_PROFIT",
+] as const;
+
 /** Humanize a Plaid personal_finance_category primary code, e.g.
  *  "FOOD_AND_DRINK" -> "Food and drink". */
 export function humanizeCategory(code: string | null | undefined): string {

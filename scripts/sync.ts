@@ -4,6 +4,8 @@
  */
 import "dotenv/config";
 import { syncAllItems } from "@/lib/plaid/sync";
+import { seedCards } from "@/lib/db/rewards-queries";
+import { recomputeAndPersist } from "@/lib/rewards/compute";
 
 async function main() {
   const results = await syncAllItems();
@@ -14,6 +16,9 @@ async function main() {
         `accounts=${r.accounts} holdings=${r.holdings} [${status}]`,
     );
   }
+  await seedCards();
+  const { updated } = await recomputeAndPersist();
+  console.log(`Rewards: computed optimal card + delta for ${updated} purchases.`);
   process.exit(results.some((r) => r.error) ? 1 : 0);
 }
 
