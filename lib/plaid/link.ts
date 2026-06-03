@@ -18,7 +18,12 @@ export async function createLinkToken(): Promise<string> {
   const res = await plaid().linkTokenCreate({
     user: { client_user_id: clientUserId() },
     client_name: "Finance Aggregator",
-    products: [Products.Transactions, Products.Investments],
+    // Transactions is required for every institution. Investments is pulled
+    // only where the institution supports it (e.g. Schwab), so credit-card-only
+    // banks (Chase/Capital One/Discover) don't fail with "no investment accounts"
+    // / "institution not supported".
+    products: [Products.Transactions],
+    required_if_supported_products: [Products.Investments],
     country_codes: [CountryCode.Us],
     language: "en",
     ...(PLAID_WEBHOOK_URL ? { webhook: PLAID_WEBHOOK_URL } : {}),

@@ -94,12 +94,25 @@ export interface SpendingFilter {
   accountId?: string;
 }
 
+// Categories that represent money movement, not consumption. Excluded from
+// spending views so inter-account transfers and credit-card payments don't
+// inflate totals or double-count card purchases. (Mortgage/auto/student-loan
+// payments stay in — only the credit-card-payment detail is dropped.)
+const NON_SPEND_PRIMARY = ["TRANSFER_IN", "TRANSFER_OUT"];
+const NON_SPEND_DETAILED = ["LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"];
+
 function spendingWhere(f: SpendingFilter): SQL | undefined {
   const clauses: SQL[] = [
     // Outflows only (positive = money leaving the account).
     sql`${transactions.amountCents} > 0`,
     sql`${transactions.pending} = false`,
   ];
+  for (const p of NON_SPEND_PRIMARY) {
+    clauses.push(sql`coalesce(${transactions.pfcPrimary}, '') <> ${p}`);
+  }
+  for (const d of NON_SPEND_DETAILED) {
+    clauses.push(sql`coalesce(${transactions.pfcDetailed}, '') <> ${d}`);
+  }
   if (f.from) clauses.push(gte(transactions.postedAt, f.from));
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
