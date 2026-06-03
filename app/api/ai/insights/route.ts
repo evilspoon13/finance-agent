@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { generateInsight } from "@/lib/ai/insights";
+import { getInsight } from "@/lib/ai/insights";
 import { aiUnavailableMessage } from "@/lib/ai/client";
 
 const bodySchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
   account: z.string().optional(),
+  force: z.boolean().optional(),
 });
 
 function parseDate(v: string | undefined, endOfDay = false): Date | undefined {
@@ -27,12 +28,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const text = await generateInsight({
-      from: parseDate(body.from),
-      to: parseDate(body.to, true),
-      accountId: body.account,
-    });
-    return NextResponse.json({ text });
+    const result = await getInsight(
+      {
+        from: parseDate(body.from),
+        to: parseDate(body.to, true),
+        accountId: body.account,
+      },
+      body.force ?? false,
+    );
+    return NextResponse.json(result);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Connection refused etc. -> the local model server isn't up.

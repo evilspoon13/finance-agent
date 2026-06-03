@@ -379,6 +379,23 @@ export async function spendingDrilldown(
   return { totalCents: total, categories };
 }
 
+/**
+ * A fingerprint of the spending in a range: transaction count, summed amount,
+ * and the latest updated_at. Changes whenever anything in scope is added,
+ * edited, or removed — used to invalidate cached AI insights.
+ */
+export async function spendingFingerprint(f: SpendingFilter = {}): Promise<string> {
+  const [row] = await db
+    .select({
+      count: sql<number>`count(*)::int`,
+      sum: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::bigint`,
+      latest: sql<string>`coalesce(max(${transactions.updatedAt})::text, '')`,
+    })
+    .from(transactions)
+    .where(spendingWhere(f));
+  return `${row?.count ?? 0}:${row?.sum ?? 0}:${row?.latest ?? ""}`;
+}
+
 /** Count of transactions matching a filter (for pagination). */
 export async function countTransactions(f: TxnFilter = {}): Promise<number> {
   const clauses: SQL[] = [];

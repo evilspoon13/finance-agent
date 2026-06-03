@@ -131,6 +131,19 @@ export const alerts = pgTable("alerts", {
   sentAt: timestamp("sent_at", { withTimezone: true }),
 });
 
+/**
+ * Cache for generated AI insights. `fingerprint` captures the underlying
+ * spending (count + sum + latest updated_at) so a cached insight is reused
+ * until the spending in that scope actually changes.
+ */
+export const aiCache = pgTable("ai_cache", {
+  scope: text("scope").primaryKey(), // e.g. insight:<from>:<to>:<account>
+  fingerprint: text("fingerprint").notNull(),
+  model: text("model").notNull(),
+  content: text("content").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Account = typeof accounts.$inferSelect;
