@@ -243,6 +243,142 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
   return rows;
 }
 
+export interface DetailedSpend {
+  detailed: string;
+  totalCents: number;
+  count: number;
+}
+export interface MerchantSpend {
+  merchant: string;
+  totalCents: number;
+  count: number;
+}
+export interface CategoryDrilldown {
+  category: string;
+  totalCents: number;
+  count: number;
+  pct: number; // share of total spending in range
+  detailed: DetailedSpend[];
+  topMerchants: MerchantSpend[];
+  prevCents: number | null; // previous equal-length window, or null if no range
+  trendPct: number | null; // % change vs previous window
+}
+export interface SpendingDrilldown {
+  totalCents: number;
+  categories: CategoryDrilldown[];
+}
+
+/** Previous equal-length window immediately before the current one (for trends). */
+function previousWindow(f: SpendingFilter): { from: Date; to: Date } | null {
+  if (!f.from) return null; // all-time -> no comparison window
+  const to = f.from;
+  const end = f.to ?? new Date();
+  const dur = end.getTime() - f.from.getTime();
+  if (dur <= 0) return null;
+  return { from: new Date(f.from.getTime() - dur), to };
+}
+
+/**
+ * Rich spending breakdown for the drill-down UI: per category, the
+ * subcategory (pfc_detailed) split, top merchants, and the period-over-period
+ * trend. Assembled from a few grouped queries (no N+1 per category).
+ */
+export async function spendingDrilldown(
+  f: SpendingFilter = {},
+  merchantsPerCategory = 5,
+): Promise<SpendingDrilldown> {
+  const [primaryRows, detailedRows, merchantRows] = await Promise.all([
+    db
+      .select({
+        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(transactions)
+      .where(spendingWhere(f))
+      .groupBy(sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`),
+    db
+      .select({
+        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        detailed: sql<string>`coalesce(${transactions.pfcDetailed}, 'OTHER')`,
+        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(transactions)
+      .where(spendingWhere(f))
+      .groupBy(
+        sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        sql`coalesce(${transactions.pfcDetailed}, 'OTHER')`,
+      ),
+    db
+      .select({
+        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(transactions)
+      .where(spendingWhere(f))
+      .groupBy(
+        sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        sql`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      ),
+  ]);
+
+  // Previous-window totals per category (for trend), if a range is set.
+  const prev = previousWindow(f);
+  const prevByCategory = new Map<string, number>();
+  if (prev) {
+    const prevRows = await db
+      .select({
+        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      })
+      .from(transactions)
+      .where(spendingWhere({ from: prev.from, to: prev.to, accountId: f.accountId }))
+      .groupBy(sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`);
+    for (const r of prevRows) prevByCategory.set(r.category, r.totalCents ?? 0);
+  }
+
+  const detailedByCat = new Map<string, DetailedSpend[]>();
+  for (const r of detailedRows) {
+    const list = detailedByCat.get(r.category) ?? [];
+    list.push({ detailed: r.detailed, totalCents: r.totalCents ?? 0, count: r.count });
+    detailedByCat.set(r.category, list);
+  }
+  const merchantsByCat = new Map<string, MerchantSpend[]>();
+  for (const r of merchantRows) {
+    const list = merchantsByCat.get(r.category) ?? [];
+    list.push({ merchant: r.merchant, totalCents: r.totalCents ?? 0, count: r.count });
+    merchantsByCat.set(r.category, list);
+  }
+
+  const total = primaryRows.reduce((n, r) => n + (r.totalCents ?? 0), 0);
+
+  const categories: CategoryDrilldown[] = primaryRows
+    .map((r) => {
+      const totalCents = r.totalCents ?? 0;
+      const prevCents = prev ? (prevByCategory.get(r.category) ?? 0) : null;
+      const trendPct =
+        prevCents && prevCents > 0 ? Math.round(((totalCents - prevCents) / prevCents) * 100) : null;
+      return {
+        category: r.category,
+        totalCents,
+        count: r.count,
+        pct: total > 0 ? Math.round((totalCents / total) * 100) : 0,
+        detailed: (detailedByCat.get(r.category) ?? []).sort((a, b) => b.totalCents - a.totalCents),
+        topMerchants: (merchantsByCat.get(r.category) ?? [])
+          .sort((a, b) => b.totalCents - a.totalCents)
+          .slice(0, merchantsPerCategory),
+        prevCents,
+        trendPct,
+      };
+    })
+    .sort((a, b) => b.totalCents - a.totalCents);
+
+  return { totalCents: total, categories };
+}
+
 /** Count of transactions matching a filter (for pagination). */
 export async function countTransactions(f: TxnFilter = {}): Promise<number> {
   const clauses: SQL[] = [];
