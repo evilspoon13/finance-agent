@@ -21,6 +21,11 @@ const coreSchema = z.object({
       }
     }, "TOKEN_ENC_KEY must be a base64-encoded 32-byte key (openssl rand -base64 32)"),
   APP_OWNER_NAME: z.string().default("Owner"),
+  // Local-first AI (Ollama by default; OpenAI-compatible endpoint). Kept free
+  // and on-device so transaction data never leaves the machine.
+  AI_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
+  AI_MODEL: z.string().default("qwen2.5-coder:7b"),
+  AI_API_KEY: z.string().default("ollama"), // ignored by Ollama; required by the SDK
 });
 
 const plaidSchema = z.object({
