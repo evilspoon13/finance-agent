@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * AI insight for the current spending range. Runs automatically on mount and is
- * served from a server-side cache until spending in this range changes
- * (fingerprint), so repeat views are instant. "Regenerate" forces a refresh.
+ * Collapsible AI insight for the current spending range. Runs automatically on
+ * mount and is served from a server-side cache until spending in this range
+ * changes, so repeat views are instant. Collapsed by default to stay minimal;
+ * shows a one-line teaser, expands to the full analysis.
  */
 export function InsightsPanel({
   from,
@@ -21,9 +22,8 @@ export function InsightsPanel({
   const [loading, setLoading] = useState(true);
   const [cached, setCached] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
-  // First await happens before any setState, so this is safe to call from an
-  // effect (no synchronous state update during render commit).
   const load = useCallback(
     async (force: boolean) => {
       try {
@@ -55,50 +55,65 @@ export function InsightsPanel({
     [from, to, account],
   );
 
-  // Auto-run when the range changes (cache makes this cheap on repeat views).
   useEffect(() => {
-    // load() only calls setState after its first await (the fetch), so this is
-    // an async data fetch, not the synchronous cascade the rule guards against.
+    // load() only calls setState after its first await (the fetch).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load(false);
   }, [load]);
 
-  function regenerate() {
+  function regenerate(e: React.MouseEvent) {
+    e.stopPropagation();
     setLoading(true);
     setText(null);
+    setOpen(true);
     void load(true);
   }
 
-  return (
-    <div className="mb-8 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">AI insights</h3>
-        <div className="flex items-center gap-3 text-xs text-zinc-400">
-          {updatedAt && !loading ? (
-            <span>
-              {cached ? "cached" : "updated"} {new Date(updatedAt).toLocaleString()}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={regenerate}
-            disabled={loading}
-            className="rounded-md border border-zinc-300 px-2.5 py-1 font-medium text-foreground hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            {loading ? "Analyzing…" : "Regenerate"}
-          </button>
-        </div>
-      </div>
+  const teaser = text ? text.split("\n").find((l) => l.trim().length > 0)?.slice(0, 120) : null;
 
-      {loading && !text ? (
-        <p className="mt-3 animate-pulse text-sm text-zinc-400">Analyzing this range locally…</p>
+  return (
+    <div className="mb-8 rounded-lg border border-zinc-200 dark:border-zinc-800">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+      >
+        <span className={`text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+        <span className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+          AI insights
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-zinc-400">
+          {loading && !text ? "Analyzing locally…" : !open && teaser ? teaser + "…" : ""}
+        </span>
+        <span className="shrink-0 text-xs text-zinc-400">
+          {updatedAt && !loading ? (cached ? "cached" : "updated") : ""}
+        </span>
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={regenerate}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") regenerate(e as unknown as React.MouseEvent);
+          }}
+          className="shrink-0 rounded-md border border-zinc-300 px-2 py-1 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        >
+          {loading ? "…" : "Regenerate"}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="border-t border-zinc-100 px-4 py-4 dark:border-zinc-800">
+          {text ? (
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+              {text}
+            </p>
+          ) : error ? (
+            <p className="text-sm text-red-600">{error}</p>
+          ) : (
+            <p className="animate-pulse text-sm text-zinc-400">Analyzing this range locally…</p>
+          )}
+        </div>
       ) : null}
-      {text ? (
-        <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
-          {text}
-        </p>
-      ) : null}
-      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
 import { FilterBar } from "@/components/FilterBar";
 import { InsightsPanel } from "@/components/InsightsPanel";
+import { AskBox } from "@/components/AskBox";
 import {
   spendingDrilldown,
   spendingByMonth,
@@ -64,6 +65,8 @@ export default async function SpendingPage(props: {
         to={f.to?.toISOString().slice(0, 10)}
         account={f.accountId}
       />
+
+      <AskBox />
 
       <section className="mb-8">
         <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">

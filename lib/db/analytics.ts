@@ -396,6 +396,30 @@ export async function spendingFingerprint(f: SpendingFilter = {}): Promise<strin
   return `${row?.count ?? 0}:${row?.sum ?? 0}:${row?.latest ?? ""}`;
 }
 
+/** Top merchants by spend, optionally scoped to a category, for the AI agent. */
+export async function topMerchants(
+  f: SpendingFilter & { category?: string } = {},
+  limit = 10,
+): Promise<MerchantSpend[]> {
+  const clauses: SQL[] = [];
+  const base = spendingWhere(f);
+  if (base) clauses.push(base);
+  if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+
+  const rows = await db
+    .select({
+      merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(transactions)
+    .where(and(...clauses))
+    .groupBy(sql`coalesce(${transactions.merchantName}, ${transactions.name})`)
+    .orderBy(sql`sum(${transactions.amountCents}) desc`)
+    .limit(limit);
+  return rows.map((r) => ({ merchant: r.merchant, totalCents: r.totalCents ?? 0, count: r.count }));
+}
+
 /** Count of transactions matching a filter (for pagination). */
 export async function countTransactions(f: TxnFilter = {}): Promise<number> {
   const clauses: SQL[] = [];
