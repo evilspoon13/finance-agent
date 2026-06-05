@@ -1,4 +1,5 @@
 import { PageShell } from "@/components/PageShell";
+import { BudgetAdvisor } from "@/components/BudgetAdvisor";
 import { budgetProgress, listBudgets } from "@/lib/db/budget-queries";
 import { formatCents } from "@/lib/money";
 import { humanizeCategory, BUDGETABLE_CATEGORIES } from "@/lib/category";
@@ -13,6 +14,8 @@ export default async function BudgetsPage() {
 
   return (
     <PageShell title="Budgets" subtitle="Per-category monthly limits and current-month progress.">
+      <BudgetAdvisor />
+
       {available.length > 0 ? (
         <form action={createBudgetAction} className="mb-8 flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs text-zinc-500">

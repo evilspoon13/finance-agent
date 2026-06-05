@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Markdown } from "./Markdown";
 
 /**
  * Collapsible AI insight for the current spending range. Runs automatically on
@@ -104,9 +105,9 @@ export function InsightsPanel({
       {open ? (
         <div className="border-t border-zinc-100 px-4 py-4 dark:border-zinc-800">
           {text ? (
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+            <Markdown className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
               {text}
-            </p>
+            </Markdown>
           ) : error ? (
             <p className="text-sm text-red-600">{error}</p>
           ) : (

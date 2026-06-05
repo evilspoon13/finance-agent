@@ -13,6 +13,15 @@ export type EarnRules =
       bps: number; // basis points on everything
     }
   | {
+      kind: "category";
+      currency: "cashback";
+      // User-defined cards: a base rate on everything, plus optional per-category
+      // bonus rates (basis points), keyed by reward tag. The engine applies the
+      // highest matching bonus for a purchase, else the base.
+      baseBps: number;
+      bonuses: Partial<Record<RewardTag, number>>;
+    }
+  | {
       kind: "rotating";
       currency: "cashback";
       // 5% on the quarter's active categories up to the cap, then baseBps; the

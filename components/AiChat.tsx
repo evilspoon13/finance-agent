@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Markdown } from "./Markdown";
 
 interface Message {
   role: "user" | "assistant";
@@ -72,7 +73,7 @@ export function AiChat({ initialQuestion }: { initialQuestion?: string }) {
 
   return (
     <div className="flex flex-col">
-      <div className="min-h-[200px] space-y-4">
+      <div className={`space-y-4 ${messages.length === 0 && !loading ? "" : "min-h-[200px]"}`}>
         {messages.length === 0 && !loading ? (
           <div className="space-y-3">
             <p className="text-sm text-zinc-500">Ask anything about your finances. Try:</p>
@@ -82,7 +83,7 @@ export function AiChat({ initialQuestion }: { initialQuestion?: string }) {
                   key={s}
                   type="button"
                   onClick={() => submit(s)}
-                  className="rounded-full border border-zinc-300 px-3 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="rounded-full border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   {s}
                 </button>
@@ -94,13 +95,13 @@ export function AiChat({ initialQuestion }: { initialQuestion?: string }) {
         {messages.map((m, i) => (
           <div key={i} className={m.role === "user" ? "text-right" : ""}>
             <div
-              className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
+              className={`inline-block max-w-[85%] rounded-lg px-3 py-2 text-left text-sm ${
                 m.role === "user"
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                  ? "whitespace-pre-wrap bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
                   : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
               }`}
             >
-              {m.content}
+              {m.role === "assistant" ? <Markdown>{m.content}</Markdown> : m.content}
             </div>
           </div>
         ))}

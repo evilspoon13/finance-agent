@@ -1,6 +1,14 @@
-import { and, gte, lte, eq, ilike, desc, sql, type SQL } from "drizzle-orm";
+import { and, gte, lte, eq, inArray, ilike, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "./client";
 import { accounts, transactions, holdings, cards, type Account } from "./schema";
+
+/** pfc_detailed filter accepting one subcategory or a set (e.g. all dining types). */
+function detailedClause(detailed?: string | string[]): SQL | undefined {
+  if (!detailed) return undefined;
+  const list = Array.isArray(detailed) ? detailed : [detailed];
+  if (list.length === 0) return undefined;
+  return inArray(transactions.pfcDetailed, list);
+}
 
 /** Friendly display name for an account: the seeded card label if linked, else
  *  the (sometimes generic) Plaid account name. */
@@ -195,7 +203,7 @@ export interface TxnFilter {
   to?: Date;
   accountId?: string;
   category?: string;
-  detailed?: string;
+  detailed?: string | string[];
   search?: string;
   limit?: number;
   offset?: number;
@@ -218,7 +226,8 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
   if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
-  if (f.detailed) clauses.push(eq(transactions.pfcDetailed, f.detailed));
+  const det = detailedClause(f.detailed);
+  if (det) clauses.push(det);
   if (f.search) {
     const q = `%${f.search}%`;
     clauses.push(sql`(${ilike(transactions.name, q)} or ${ilike(transactions.merchantName, q)})`);
@@ -400,14 +409,21 @@ export async function spendingFingerprint(f: SpendingFilter = {}): Promise<strin
 
 /** Top merchants by spend, optionally scoped to a category, for the AI agent. */
 export async function topMerchants(
-  f: SpendingFilter & { category?: string; detailed?: string } = {},
+  f: SpendingFilter & { category?: string; detailed?: string | string[]; sort?: "spend" | "visits" } = {},
   limit = 10,
 ): Promise<MerchantSpend[]> {
   const clauses: SQL[] = [];
   const base = spendingWhere(f);
   if (base) clauses.push(base);
   if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
-  if (f.detailed) clauses.push(eq(transactions.pfcDetailed, f.detailed));
+  const det = detailedClause(f.detailed);
+  if (det) clauses.push(det);
+
+  // "visits" ranks by how often the user goes there; "spend" (default) by total dollars.
+  const order =
+    f.sort === "visits"
+      ? sql`count(*) desc, sum(${transactions.amountCents}) desc`
+      : sql`sum(${transactions.amountCents}) desc`;
 
   const rows = await db
     .select({
@@ -418,7 +434,7 @@ export async function topMerchants(
     .from(transactions)
     .where(and(...clauses))
     .groupBy(sql`coalesce(${transactions.merchantName}, ${transactions.name})`)
-    .orderBy(sql`sum(${transactions.amountCents}) desc`)
+    .orderBy(order)
     .limit(limit);
   return rows.map((r) => ({ merchant: r.merchant, totalCents: r.totalCents ?? 0, count: r.count }));
 }

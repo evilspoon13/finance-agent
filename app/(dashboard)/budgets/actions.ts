@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { createBudget, updateBudget, deleteBudget } from "@/lib/db/budget-queries";
+import { createBudget, updateBudget, deleteBudget, upsertBudget } from "@/lib/db/budget-queries";
 import { dollarsToCents } from "@/lib/money";
 import { BUDGETABLE_CATEGORIES } from "@/lib/category";
 
@@ -42,4 +42,30 @@ export async function deleteBudgetAction(formData: FormData): Promise<void> {
     await deleteBudget(id);
     revalidatePath("/budgets");
   }
+}
+
+const applySchema = z.object({
+  items: z
+    .array(
+      z.object({
+        category: z.enum(BUDGETABLE_CATEGORIES),
+        limitCents: z.coerce.number().int().positive().max(100_000_000),
+      }),
+    )
+    .min(1)
+    .max(BUDGETABLE_CATEGORIES.length),
+});
+
+/** Apply a reviewed AI budget plan: upsert one limit per category. */
+export async function applyBudgetsAction(
+  items: { category: string; limitCents: number }[],
+): Promise<{ ok: boolean; applied: number; error?: string }> {
+  const parsed = applySchema.safeParse({ items });
+  if (!parsed.success) return { ok: false, applied: 0, error: "Invalid budget plan" };
+
+  for (const item of parsed.data.items) {
+    await upsertBudget(item.category, item.limitCents);
+  }
+  revalidatePath("/budgets");
+  return { ok: true, applied: parsed.data.items.length };
 }

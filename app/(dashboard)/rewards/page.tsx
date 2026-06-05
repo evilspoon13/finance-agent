@@ -35,7 +35,11 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
     return (
       <PageShell title="Rewards" subtitle="Best-card guidance and missed rewards.">
         <p className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700">
-          No cards seeded yet. Run a sync to link your cards.
+          No cards yet. Connect a credit account and sync, or add cards on the{" "}
+          <Link href="/cards" className="underline underline-offset-2">
+            Cards
+          </Link>{" "}
+          page.
         </p>
       </PageShell>
     );

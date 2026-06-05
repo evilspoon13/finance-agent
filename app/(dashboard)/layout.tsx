@@ -1,17 +1,15 @@
 import { Nav } from "@/components/Nav";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const owner = process.env.APP_OWNER_NAME || "Owner";
   return (
-    <div className="flex flex-1">
-      <aside className="w-56 shrink-0 border-r border-zinc-200 dark:border-zinc-800">
-        <div className="px-4 py-5">
-          <h1 className="text-base font-semibold tracking-tight">Finance</h1>
-          <p className="text-xs text-zinc-500">{owner}</p>
+    <>
+      <header className="sticky top-0 z-20 flex justify-center px-4 pt-4">
+        {/* Centered floating capsule — glassy, rounded, with a soft shadow. */}
+        <div className="flex max-w-[calc(100vw-2rem)] items-center rounded-full border border-zinc-200/70 bg-white/70 px-2 py-1.5 shadow-lg shadow-zinc-900/5 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-900/70">
+          <Nav />
         </div>
-        <Nav />
-      </aside>
-      <main className="flex-1 overflow-auto p-8">{children}</main>
-    </div>
+      </header>
+      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
+    </>
   );
 }

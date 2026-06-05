@@ -12,6 +12,9 @@ import { humanizeCategory, PFC_PRIMARIES } from "@/lib/category";
 
 const categoryEnum = z.enum(PFC_PRIMARIES);
 
+// One pfc_detailed code or a set of them (e.g. all dining subcategories).
+const subcategoryArg = z.union([z.string(), z.array(z.string())]).optional();
+
 /**
  * Whitelisted, read-only tools the Q&A agent may call. The model never writes
  * SQL — it calls these parameterized functions, whose args are zod-validated.
@@ -66,14 +69,20 @@ const TOOLS: Tool[] = [
   {
     name: "get_top_merchants",
     description:
-      "Top merchants by total spend, optionally within a category and/or a subcategory and/or a date range. To find a top RESTAURANT, use category FOOD_AND_DRINK with subcategory FOOD_AND_DRINK_RESTAURANT (dining also includes FOOD_AND_DRINK_FAST_FOOD and FOOD_AND_DRINK_COFFEE).",
+      "Ranks merchants, optionally within a category/subcategory/date range. Each row returns the merchant, total spend, AND number of visits. Set sort='visits' for 'where do I go most often / most frequently'; sort='spend' (default) for 'where do I spend the most'. To scope to RESTAURANTS use category FOOD_AND_DRINK with subcategory FOOD_AND_DRINK_RESTAURANT (dining also includes FOOD_AND_DRINK_FAST_FOOD and FOOD_AND_DRINK_COFFEE).",
     parameters: {
       type: "object",
       properties: {
         category: { type: "string", enum: [...PFC_PRIMARIES], description: "pfc_primary code" },
         subcategory: {
+          description:
+            "pfc_detailed code, or an ARRAY of codes. For 'eating out / dining / restaurants', pass all three: [\"FOOD_AND_DRINK_RESTAURANT\",\"FOOD_AND_DRINK_FAST_FOOD\",\"FOOD_AND_DRINK_COFFEE\"] (this excludes groceries).",
+          anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+        },
+        sort: {
           type: "string",
-          description: "pfc_detailed code to narrow further, e.g. FOOD_AND_DRINK_RESTAURANT",
+          enum: ["spend", "visits"],
+          description: "spend = by total dollars (default); visits = by how often the user goes",
         },
         from: { type: "string", description: "start date YYYY-MM-DD" },
         to: { type: "string", description: "end date YYYY-MM-DD" },
@@ -82,7 +91,8 @@ const TOOLS: Tool[] = [
     },
     schema: z.object({
       category: categoryEnum.optional(),
-      subcategory: z.string().optional(),
+      subcategory: subcategoryArg,
+      sort: z.enum(["spend", "visits"]).optional(),
       ...dateRange,
       limit: z.number().optional(),
     }),
@@ -90,7 +100,8 @@ const TOOLS: Tool[] = [
       const a = z
         .object({
           category: categoryEnum.optional(),
-          subcategory: z.string().optional(),
+          subcategory: subcategoryArg,
+          sort: z.enum(["spend", "visits"]).optional(),
           ...dateRange,
           limit: z.number().optional(),
         })
@@ -99,6 +110,7 @@ const TOOLS: Tool[] = [
         {
           category: a.category,
           detailed: a.subcategory,
+          sort: a.sort,
           from: parseDate(a.from),
           to: parseDate(a.to, true),
         },
@@ -117,7 +129,11 @@ const TOOLS: Tool[] = [
         from: { type: "string", description: "start date YYYY-MM-DD" },
         to: { type: "string", description: "end date YYYY-MM-DD" },
         category: { type: "string", enum: [...PFC_PRIMARIES], description: "pfc_primary code" },
-        subcategory: { type: "string", description: "pfc_detailed code, e.g. FOOD_AND_DRINK_RESTAURANT" },
+        subcategory: {
+          description:
+            "pfc_detailed code, or an ARRAY of codes (dining = the three FOOD_AND_DRINK restaurant/fast-food/coffee codes). Omit when searching for a specific named merchant.",
+          anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+        },
         search: { type: "string", description: "merchant/name substring" },
         limit: { type: "number", description: "max rows (default 20)" },
       },
@@ -125,7 +141,7 @@ const TOOLS: Tool[] = [
     schema: z.object({
       ...dateRange,
       category: categoryEnum.optional(),
-      subcategory: z.string().optional(),
+      subcategory: subcategoryArg,
       search: z.string().optional(),
       limit: z.number().optional(),
     }),
@@ -134,7 +150,7 @@ const TOOLS: Tool[] = [
         .object({
           ...dateRange,
           category: categoryEnum.optional(),
-          subcategory: z.string().optional(),
+          subcategory: subcategoryArg,
           search: z.string().optional(),
           limit: z.number().optional(),
         })

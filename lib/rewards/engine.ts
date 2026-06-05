@@ -32,6 +32,14 @@ export function evaluateCard(
 
   if (rules.kind === "flat") {
     value = applyBps(amountCents, rules.bps);
+  } else if (rules.kind === "category") {
+    // Highest matching category bonus, else the base rate.
+    let bps = rules.baseBps;
+    for (const t of tags) {
+      const bonus = rules.bonuses[t];
+      if (bonus != null && bonus > bps) bps = bonus;
+    }
+    value = applyBps(amountCents, bps);
   } else if (rules.kind === "rotating") {
     const inBonus =
       ctx.discoverCapRemainingCents > 0 && [...tags].some((t) => ctx.discoverActive.has(t));

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, gt, gte, sql } from "drizzle-orm";
 import { db } from "./client";
 import { budgets, transactions, type Budget } from "./schema";
 
@@ -14,6 +14,20 @@ export async function listBudgets(): Promise<Budget[]> {
 
 export async function createBudget(category: string, monthlyLimitCents: number): Promise<void> {
   await db.insert(budgets).values({ id: randomUUID(), category, monthlyLimitCents });
+}
+
+/** Insert or update the budget for a category (category is the natural key). */
+export async function upsertBudget(category: string, monthlyLimitCents: number): Promise<void> {
+  const existing = await db
+    .select({ id: budgets.id })
+    .from(budgets)
+    .where(eq(budgets.category, category))
+    .limit(1);
+  if (existing[0]) {
+    await db.update(budgets).set({ monthlyLimitCents }).where(eq(budgets.id, existing[0].id));
+  } else {
+    await db.insert(budgets).values({ id: randomUUID(), category, monthlyLimitCents });
+  }
 }
 
 export async function updateBudget(id: string, monthlyLimitCents: number): Promise<void> {
@@ -56,9 +70,9 @@ export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]
     .from(transactions)
     .where(
       and(
-        sql`${transactions.amountCents} > 0`,
+        gt(transactions.amountCents, 0),
         eq(transactions.pending, false),
-        sql`${transactions.postedAt} >= ${from}`,
+        gte(transactions.postedAt, from),
         sql`coalesce(${transactions.pfcPrimary}, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')`,
         sql`coalesce(${transactions.pfcDetailed}, '') <> 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'`,
       ),
