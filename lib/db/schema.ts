@@ -23,6 +23,7 @@ import {
 
 export const itemStatusEnum = pgEnum("item_status", ["good", "login_required", "error"]);
 export const alertKindEnum = pgEnum("alert_kind", ["budget", "wrong_card", "anomaly"]);
+export const messageRoleEnum = pgEnum("message_role", ["user", "assistant"]);
 
 /** One row per Plaid connection (per institution). */
 export const items = pgTable("items", {
@@ -73,6 +74,13 @@ export const transactions = pgTable(
     // Phase 4 computed columns (seams for the deferred alerter).
     optimalCardId: text("optimal_card_id"),
     rewardDeltaCents: integer("reward_delta_cents"),
+    // User-assigned budget category for peer-to-peer app payments (Venmo/Zelle/
+    // CashApp). Plaid buckets these under TRANSFER_OUT_FROM_APPS with no idea what
+    // they were for, so the user tags each one: a BUDGETABLE_CATEGORIES code makes
+    // it count as real spend, the sentinel "IGNORE" dismisses it, null = not yet
+    // reviewed. `userMemo` is the free-text note ("rent", "car payment").
+    userCategory: text("user_category"),
+    userMemo: text("user_memo"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -113,6 +121,14 @@ export const cards = pgTable("cards", {
   earnRules: jsonb("earn_rules").notNull(),
   discoverCapCents: integer("discover_cap_cents"),
   cashbackMatchYearOne: boolean("cashback_match_year_one").notNull().default(false),
+  // AI-driven rewards: the user must confirm what the AI found before a card
+  // counts toward recommendations. `aiSuggestion` caches the raw lookup for the
+  // confirm UI; fee/signup/notes are display-only info.
+  rewardsConfirmed: boolean("rewards_confirmed").notNull().default(false),
+  annualFeeCents: integer("annual_fee_cents"),
+  signupBonus: text("signup_bonus"),
+  aiNotes: text("ai_notes"),
+  aiSuggestion: jsonb("ai_suggestion"),
 });
 
 export const budgets = pgTable("budgets", {
@@ -144,6 +160,32 @@ export const aiCache = pgTable("ai_cache", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * AI chat persistence. One row per conversation; messages hold only the visible
+ * user/assistant turns (tool calls stay ephemeral) — that's all the agent needs
+ * to reconstruct history and keeps the per-request token footprint small.
+ */
+export const conversations = pgTable("conversations", {
+  id: text("id").primaryKey(), // app-generated uuid
+  title: text("title").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: text("id").primaryKey(), // app-generated uuid
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    role: messageRoleEnum("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("messages_conversation_idx").on(t.conversationId)],
+);
+
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Account = typeof accounts.$inferSelect;
@@ -158,3 +200,7 @@ export type Budget = typeof budgets.$inferSelect;
 export type NewBudget = typeof budgets.$inferInsert;
 export type Alert = typeof alerts.$inferSelect;
 export type NewAlert = typeof alerts.$inferInsert;
+export type Conversation = typeof conversations.$inferSelect;
+export type NewConversation = typeof conversations.$inferInsert;
+export type Message = typeof messages.$inferSelect;
+export type NewMessage = typeof messages.$inferInsert;

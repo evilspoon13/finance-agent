@@ -6,13 +6,35 @@ import {
   createManagedCard,
   updateManagedCard,
   deleteManagedCard,
+  getCardById,
+  setCardSuggestion,
+  getCardSuggestion,
+  confirmCard,
   type CardInput,
 } from "@/lib/db/rewards-queries";
 import { recomputeAndPersist } from "@/lib/rewards/compute";
 import { REWARD_CATEGORY_TAGS } from "@/lib/rewards/reward-categories";
+import {
+  lookupCardRewards,
+  suggestionToEarnRules,
+  type CardRewardSuggestion,
+  type SuggestedBonus,
+} from "@/lib/ai/card-rewards";
 
 const pctSchema = z.coerce.number().min(0).max(100);
 const pctToBps = (pct: number) => Math.round(pct * 100);
+
+const EMPTY_SUGGESTION: CardRewardSuggestion = {
+  currency: "cashback",
+  baseRatePct: 1,
+  bonuses: [],
+  rotating: null,
+  annualFee: null,
+  signupBonus: null,
+  cashbackMatchYearOne: false,
+  notes: "",
+  confidence: "low",
+};
 
 /** Build a CardInput from form fields: label, accountId, baseRate, bonus_<tag>. */
 function parseCardInput(formData: FormData): CardInput | null {
@@ -61,5 +83,66 @@ export async function deleteCardAction(formData: FormData): Promise<void> {
   const id = String(formData.get("id") ?? "").trim();
   if (!id) return;
   await deleteManagedCard(id);
+  await refresh();
+}
+
+/** Run the AI rewards lookup for a card and cache the suggestion for confirming. */
+export async function lookupCardRewardsAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return;
+  const card = await getCardById(id);
+  if (!card) return;
+  const suggestion = await lookupCardRewards(card.label);
+  await setCardSuggestion(id, suggestion);
+  revalidatePath("/cards");
+}
+
+const amountOpt = (v: FormDataEntryValue | null): number | null => {
+  const n = Number(String(v ?? "").trim());
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+/**
+ * Confirm a card's rewards. Starts from the server-trusted cached AI suggestion
+ * and overlays the user's edits (base rate, per-category bonuses + caps, fee,
+ * signup) for category cards; rotating schedules are carried through from the
+ * suggestion. Marks the card confirmed so it counts toward recommendations.
+ */
+export async function confirmCardAction(formData: FormData): Promise<void> {
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return;
+
+  const base = (await getCardSuggestion(id)) ?? EMPTY_SUGGESTION;
+
+  const baseRate = pctSchema.safeParse(formData.get("baseRate"));
+  const baseRatePct = baseRate.success ? baseRate.data : base.baseRatePct;
+
+  // Editable category bonuses (only for non-rotating cards; rotating carries through).
+  let bonuses: SuggestedBonus[] = base.bonuses;
+  if (!base.rotating) {
+    bonuses = [];
+    for (const tag of REWARD_CATEGORY_TAGS) {
+      const rate = pctSchema.safeParse(formData.get(`bonus_${tag}`));
+      if (!rate.success || rate.data <= 0) continue;
+      const cap = amountOpt(formData.get(`cap_${tag}`));
+      const periodRaw = String(formData.get(`capPeriod_${tag}`) ?? "");
+      const capPeriod =
+        cap && (periodRaw === "year" || periodRaw === "quarter" || periodRaw === "month")
+          ? periodRaw
+          : null;
+      bonuses.push({ category: tag, ratePct: rate.data, capAmount: cap, capPeriod });
+    }
+  }
+
+  const signup = String(formData.get("signupBonus") ?? "").trim();
+  const suggestion: CardRewardSuggestion = {
+    ...base,
+    baseRatePct,
+    bonuses,
+    annualFee: amountOpt(formData.get("annualFee")),
+    signupBonus: signup || null,
+  };
+
+  await confirmCard(id, suggestionToEarnRules(suggestion));
   await refresh();
 }

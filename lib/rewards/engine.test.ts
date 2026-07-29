@@ -7,12 +7,16 @@ import type { RewardTag } from "./config";
 const cards = CARD_CATALOG;
 const card = (id: string): CardDef => cards.find((c) => c.id === id)!;
 
-function ctx(overrides: Partial<RewardContext> = {}): RewardContext {
+function ctx(
+  overrides: Partial<RewardContext> & { rotatingCapRemaining?: number } = {},
+): RewardContext {
+  const { rotatingCapRemaining = 150_000, ...rest } = overrides;
   return {
+    date: new Date("2026-05-15"),
     discoverActive: new Set(discoverCategoriesFor(new Date("2026-05-15"))), // Q2: dining, home_improvement
-    discoverCapRemainingCents: 150_000,
+    capRemaining: (_cardId, capKey) => (capKey === "rotating" ? rotatingCapRemaining : Infinity),
     milesValueCents: MILES_VALUE_CENTS,
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -34,13 +38,13 @@ describe("evaluateCard", () => {
   });
 
   it("Discover falls back to 1% once the cap is exhausted", () => {
-    const e = evaluateCard(card("discover-it"), tags("dining"), 10_000, ctx({ discoverCapRemainingCents: 0 }));
+    const e = evaluateCard(card("discover-it"), tags("dining"), 10_000, ctx({ rotatingCapRemaining: 0 }));
     expect(e.valueCents).toBe(100);
   });
 
   it("Discover blends 5%/1% across the cap boundary", () => {
     // $100 purchase, only $40 of cap left: 5% on $40 + 1% on $60 = 200 + 60 = 260
-    const e = evaluateCard(card("discover-it"), tags("dining"), 10_000, ctx({ discoverCapRemainingCents: 4_000 }));
+    const e = evaluateCard(card("discover-it"), tags("dining"), 10_000, ctx({ rotatingCapRemaining: 4_000 }));
     expect(e.valueCents).toBe(260);
   });
 
@@ -83,12 +87,70 @@ describe("bestCard", () => {
   });
 
   it("once Discover cap is gone, dining goes to United (2.6%) over Quicksilver (1.5%)", () => {
-    const { best } = bestCard(cards, tags("dining"), 10_000, ctx({ discoverCapRemainingCents: 0 }));
+    const { best } = bestCard(cards, tags("dining"), 10_000, ctx({ rotatingCapRemaining: 0 }));
     expect(best.cardId).toBe("united-explorer");
   });
 
   it("uncategorized purchase goes to Quicksilver flat 1.5%", () => {
     const { best } = bestCard(cards, tags(), 10_000, ctx());
     expect(best.cardId).toBe("quicksilver");
+  });
+});
+
+describe("capped category bonuses", () => {
+  const gold: CardDef = {
+    id: "gold",
+    label: "Gold",
+    network: "amex",
+    institutionMatch: "",
+    cashbackMatchYearOne: false,
+    earnRules: {
+      kind: "category",
+      currency: "cashback",
+      baseBps: 100,
+      bonuses: { grocery: 400 },
+      caps: { grocery: { cents: 600_000, period: "year" } },
+    },
+  };
+  const withCap = (groceryRemaining: number): RewardContext =>
+    ctx({ capRemaining: (_id, key) => (key === "grocery" ? groceryRemaining : Infinity) });
+
+  it("earns the 4% bonus while under the cap", () => {
+    expect(evaluateCard(gold, tags("grocery"), 10_000, withCap(600_000)).valueCents).toBe(400);
+  });
+  it("blends 4%/1% across the cap boundary ($40 left)", () => {
+    // 4% on $40 + 1% on $60 = 160 + 60 = 220
+    expect(evaluateCard(gold, tags("grocery"), 10_000, withCap(4_000)).valueCents).toBe(220);
+  });
+  it("falls back to base 1% once the cap is exhausted", () => {
+    expect(evaluateCard(gold, tags("grocery"), 10_000, withCap(0)).valueCents).toBe(100);
+  });
+});
+
+describe("per-card rotating schedule", () => {
+  // Card's OWN schedule (grocery in Q2) overrides the global Discover config
+  // (dining/home_improvement in Q2).
+  const flex: CardDef = {
+    id: "flex",
+    label: "Freedom Flex",
+    network: "visa",
+    institutionMatch: "",
+    cashbackMatchYearOne: false,
+    earnRules: {
+      kind: "rotating",
+      currency: "cashback",
+      bonusBps: 500,
+      baseBps: 100,
+      schedule: { "2026-Q2": ["grocery"] },
+      capCents: 150_000,
+      capPeriod: "quarter",
+    },
+  };
+
+  it("earns 5% on its own active category (grocery)", () => {
+    expect(evaluateCard(flex, tags("grocery"), 10_000, ctx()).valueCents).toBe(500);
+  });
+  it("earns only 1% on a category active globally but not on its own schedule (dining)", () => {
+    expect(evaluateCard(flex, tags("dining"), 10_000, ctx()).valueCents).toBe(100);
   });
 });

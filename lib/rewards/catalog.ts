@@ -6,6 +6,15 @@ import type { RewardTag } from "./config";
  * engine evaluates these rules against a transaction's reward tags.
  */
 
+/** Spend-cap window for a bonus rate. */
+export type CapPeriod = "year" | "quarter" | "month";
+
+/** A spend cap on a bonus: `cents` of bonus-eligible spend per `period`. */
+export interface BonusCap {
+  cents: number;
+  period: CapPeriod;
+}
+
 export type EarnRules =
   | {
       kind: "flat";
@@ -17,17 +26,25 @@ export type EarnRules =
       currency: "cashback";
       // User-defined cards: a base rate on everything, plus optional per-category
       // bonus rates (basis points), keyed by reward tag. The engine applies the
-      // highest matching bonus for a purchase, else the base.
+      // highest matching bonus for a purchase, else the base. `caps` optionally
+      // limits how much bonus-eligible spend a tag earns per period (e.g. 6%
+      // groceries up to $6k/year), after which that tag earns the base rate.
       baseBps: number;
       bonuses: Partial<Record<RewardTag, number>>;
+      caps?: Partial<Record<RewardTag, BonusCap>>;
     }
   | {
       kind: "rotating";
       currency: "cashback";
-      // 5% on the quarter's active categories up to the cap, then baseBps; the
-      // active categories + cap come from config/context, not stored here.
+      // 5% on the quarter's active categories up to the cap, then baseBps. The
+      // active categories come from this card's own `schedule` (YYYY-Qn -> tags);
+      // when absent the engine falls back to the global Discover config. `capCents`
+      // /`capPeriod` default to the Discover $1,500/quarter cap.
       bonusBps: number;
       baseBps: number;
+      schedule?: Record<string, RewardTag[]>;
+      capCents?: number;
+      capPeriod?: CapPeriod;
     }
   | {
       kind: "tiered";

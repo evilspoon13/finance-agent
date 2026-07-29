@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import { ai, aiModel } from "./client";
+import { chatCompletion, aiModel } from "./client";
 import { toolSpecs, runTool } from "./tools";
 
 /**
@@ -14,34 +14,30 @@ export interface ChatTurn {
   content: string;
 }
 
-const MAX_TOOL_ROUNDS = 6;
+const MAX_TOOL_ROUNDS = 4;
+// Cap output so a single answer can't eat the free-tier per-minute token budget.
+const MAX_ANSWER_TOKENS = 600;
 
 function systemPrompt(): string {
   const today = new Date().toISOString().slice(0, 10);
-  return `You are a personal-finance assistant answering questions about the user's own accounts.
-Today is ${today}.
+  return `You are a personal-finance assistant answering questions about the user's own accounts. Today is ${today}.
 
-TRANSLATE, NEVER ASK FOR CODES
-- Category codes (e.g. FOOD_AND_DRINK, FOOD_AND_DRINK_RESTAURANT) are an INTERNAL detail for calling tools. NEVER show a code to the user and NEVER ask the user to supply one. Map their everyday words to the right code yourself.
-- If a request is ambiguous, pick the most reasonable interpretation, answer, and state your assumption in plain English (e.g. "counting sit-down restaurants, not groceries") — do not bounce the question back.
-- The tool category argument MUST be one of these exact pfc_primary codes: INCOME, TRANSFER_IN, TRANSFER_OUT, LOAN_PAYMENTS, BANK_FEES, ENTERTAINMENT, FOOD_AND_DRINK, GENERAL_MERCHANDISE, HOME_IMPROVEMENT, MEDICAL, PERSONAL_CARE, GENERAL_SERVICES, GOVERNMENT_AND_NON_PROFIT, TRANSPORTATION, TRAVEL, RENT_AND_UTILITIES. Never invent codes.
-- "Food / food spending / eating" (general) = the WHOLE FOOD_AND_DRINK category. Pass category FOOD_AND_DRINK with NO subcategory so EVERYTHING is included — restaurants, fast food, coffee, AND groceries. Never split restaurants from fast food.
-- "Restaurants / eating out / dining out" = restaurants + fast food + coffee together, excluding groceries: pass the subcategory ARRAY ["FOOD_AND_DRINK_RESTAURANT","FOOD_AND_DRINK_FAST_FOOD","FOOD_AND_DRINK_COFFEE"].
-- Only narrow to a single subcategory when the user explicitly asks for one, e.g. "just groceries" = FOOD_AND_DRINK_GROCERIES, "just coffee" = FOOD_AND_DRINK_COFFEE.
+TOPICS: tools take a plain "topic" string — you never deal in category codes. Pass the user's words, e.g. groceries, dining out, coffee, fast food, gas, rideshare, travel, shopping, entertainment, medical, utilities, income. The server resolves it.
+- "groceries" = grocery stores ONLY. "dining out / restaurants / eating out" = restaurants + fast food + coffee (EXCLUDES groceries). "food" (general) = everything food & drink including groceries. Pick the topic that matches the user's words; if a tool returns "Unknown topic", retry with a listed one.
 
-CHOOSING TOOLS
-- "Most often / most frequently / where do I go the most" is about COUNT → call get_top_merchants with sort='visits'. "Spend the most / biggest" is about dollars → sort='spend'.
-- For a SPECIFIC named place ("what about Raising Cane's?", "how much at Costco?"), search get_transactions/get_top_merchants by name (search=) with NO category/subcategory filter — that merchant may be classified differently than you expect (e.g. Raising Cane's is fast food, not RESTAURANT). Never answer "no spending" for a named merchant until you've searched by name alone.
-- To answer "how many times" or "what dates", call get_transactions for that merchant/category and report EXACTLY the rows it returns.
-- If a tool errors or returns nothing, fix your arguments and retry before concluding there's no data.
+TOOLS:
+- "how much did I spend on X" → get_spending(topic). It returns an exact total + count. Do NOT add up transactions yourself.
+- "where do I spend the most / go most often" → get_top_merchants (sort='spend' for dollars, sort='visits' for frequency).
+- "how many times / what dates / list my X" → get_transactions, then report EXACTLY the rows returned.
+- A specific named place ("how much at Costco / Raising Cane's?") → get_transactions or get_top_merchants with search=<name> and NO topic (it may be categorized unexpectedly). Never say "no spending" for a named merchant until you've searched by name alone.
+- "break down my spending / where does my money go" → get_spending_by_category.
+- If a tool errors or returns nothing, fix the arguments and retry before concluding there's no data.
 
-GROUNDING — this is critical
-- Every number, count, date, and merchant name you state MUST come from a tool result in this conversation. NEVER invent, estimate, or pattern-fill dates or counts.
-- A count of occurrences MUST equal the number of rows the tool returned. If get_transactions returns 3 rows, the answer is 3 — never a different number, and list only those 3 dates.
-- "Monthly" / "per month" over a multi-month range = total ÷ number of months in the range. Never present a multi-month total as a monthly figure; if asked for monthly, show the period, the total, and the per-month average.
+TIME WINDOW: if the user gives no dates, tools default to the LAST 3 MONTHS. Every tool result includes a "range" — always tell the user which window the answer covers (e.g. "in the last 3 months (since 2026-03-16)"). If they ask for a specific month/year, pass from/to.
 
-STYLE
-- Be concise and direct. Lead with the answer, then a brief supporting detail. Use dollar amounts and plain category names, never codes.`;
+GROUNDING (critical): every number, count, date and merchant name MUST come from a tool result this conversation — never invent or estimate. Use get_spending's total verbatim; a count equals the rows returned. For "per month" over a multi-month range, divide the total by the number of months and show period, total, and average.
+
+STYLE: concise and direct — lead with the answer, then a brief detail. Dollar amounts and plain words, never category codes.`;
 }
 
 /**
@@ -64,11 +60,12 @@ async function chatWithRetry(
   const MAX_ATTEMPTS = 3;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await ai().chat.completions.create({
+      return await chatCompletion({
         model: aiModel(),
         // Attempt 0 is deterministic (reduces guessing); retries nudge sampling
         // to escape a malformed tool-call the model keeps emitting.
         temperature: attempt === 0 ? 0 : 0.4,
+        max_tokens: MAX_ANSWER_TOKENS,
         messages,
         tools: toolSpecs(),
         tool_choice: "auto",
@@ -88,7 +85,7 @@ async function chatWithRetry(
 export async function runAgent(question: string, history: ChatTurn[] = []): Promise<string> {
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt() },
-    ...history.slice(-8).map((t) => ({ role: t.role, content: t.content }) as const),
+    ...history.slice(-6).map((t) => ({ role: t.role, content: t.content }) as const),
     { role: "user", content: question },
   ];
 

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { eq, and, gt, gte, sql } from "drizzle-orm";
 import { db } from "./client";
 import { budgets, transactions, type Budget } from "./schema";
+import { effectiveCategory, spendRowPredicate } from "./spend-sql";
 
 /**
  * Budget CRUD plus current-month progress (spent vs limit per category).
@@ -64,7 +65,7 @@ export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]
   // Spend per pfc_primary for the current month (purchases only).
   const rows = await db
     .select({
-      category: transactions.pfcPrimary,
+      category: effectiveCategory,
       total: sql<number>`sum(${transactions.amountCents})::int`,
     })
     .from(transactions)
@@ -73,11 +74,11 @@ export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]
         gt(transactions.amountCents, 0),
         eq(transactions.pending, false),
         gte(transactions.postedAt, from),
-        sql`coalesce(${transactions.pfcPrimary}, '') not in ('TRANSFER_IN', 'TRANSFER_OUT')`,
-        sql`coalesce(${transactions.pfcDetailed}, '') <> 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'`,
+        // Purchases plus user-categorized peer-to-peer payments (see spend-sql).
+        spendRowPredicate(),
       ),
     )
-    .groupBy(transactions.pfcPrimary);
+    .groupBy(effectiveCategory);
 
   const spentByCat = new Map<string, number>();
   for (const r of rows) if (r.category) spentByCat.set(r.category, r.total ?? 0);

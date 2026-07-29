@@ -1,17 +1,50 @@
 import { applyBps } from "@/lib/money";
-import type { RewardTag } from "./config";
+import { quarterKey, type RewardTag } from "./config";
 import type { CardDef } from "./catalog";
 
 /**
  * Pure rewards math. Given a transaction's reward tags + amount and a context
- * (this quarter's Discover categories, remaining Discover cap, miles value),
- * compute each card's reward value and pick the best.
+ * (the purchase date, the global fallback rotating categories, a per-card cap
+ * lookup, and miles value), compute each card's reward value and pick the best.
+ *
+ * Spend caps are generic: `capRemaining(cardId, capKey)` returns the remaining
+ * bonus-eligible cents for a card's capped bonus (capKey is a reward tag, or
+ * "rotating"), or Infinity when uncapped. The caller (compute.ts) tracks cap
+ * consumption chronologically from actual spend.
  */
 
 export interface RewardContext {
+  date: Date;
+  /** Fallback rotating categories for `date` (cards without their own schedule). */
   discoverActive: Set<RewardTag>;
-  discoverCapRemainingCents: number;
+  capRemaining: (cardId: string, capKey: string) => number;
   milesValueCents: number;
+}
+
+/** The reward tag a card's category rule applies to a purchase (highest bonus), or null. */
+export function matchedCategoryTag(
+  rules: Extract<CardDef["earnRules"], { kind: "category" }>,
+  tags: Set<RewardTag>,
+): RewardTag | null {
+  let bps = rules.baseBps;
+  let chosen: RewardTag | null = null;
+  for (const t of tags) {
+    const bonus = rules.bonuses[t];
+    if (bonus != null && bonus > bps) {
+      bps = bonus;
+      chosen = t;
+    }
+  }
+  return chosen;
+}
+
+/** Active rotating categories for a rotating card on a date (own schedule or fallback). */
+export function rotatingActive(
+  rules: Extract<CardDef["earnRules"], { kind: "rotating" }>,
+  date: Date,
+  fallback: Set<RewardTag>,
+): Set<RewardTag> {
+  return rules.schedule ? new Set(rules.schedule[quarterKey(date)] ?? []) : fallback;
 }
 
 export interface CardEval {
@@ -33,17 +66,21 @@ export function evaluateCard(
   if (rules.kind === "flat") {
     value = applyBps(amountCents, rules.bps);
   } else if (rules.kind === "category") {
-    // Highest matching category bonus, else the base rate.
-    let bps = rules.baseBps;
-    for (const t of tags) {
-      const bonus = rules.bonuses[t];
-      if (bonus != null && bonus > bps) bps = bonus;
+    // Highest matching category bonus, else the base rate. If that bonus is
+    // capped, only the under-cap portion earns the bonus; the rest earns base.
+    const chosen = matchedCategoryTag(rules, tags);
+    const bps = chosen ? (rules.bonuses[chosen] ?? rules.baseBps) : rules.baseBps;
+    if (chosen && rules.caps?.[chosen]) {
+      const eligible = Math.min(amountCents, ctx.capRemaining(card.id, chosen));
+      value = applyBps(eligible, bps) + applyBps(amountCents - eligible, rules.baseBps);
+    } else {
+      value = applyBps(amountCents, bps);
     }
-    value = applyBps(amountCents, bps);
   } else if (rules.kind === "rotating") {
-    const inBonus =
-      ctx.discoverCapRemainingCents > 0 && [...tags].some((t) => ctx.discoverActive.has(t));
-    const eligible = inBonus ? Math.min(amountCents, ctx.discoverCapRemainingCents) : 0;
+    const active = rotatingActive(rules, ctx.date, ctx.discoverActive);
+    const inBonus = [...tags].some((t) => active.has(t));
+    const capLeft = ctx.capRemaining(card.id, "rotating");
+    const eligible = inBonus ? Math.min(amountCents, capLeft) : 0;
     value = applyBps(eligible, rules.bonusBps) + applyBps(amountCents - eligible, rules.baseBps);
   } else {
     // tiered miles

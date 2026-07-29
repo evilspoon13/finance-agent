@@ -15,6 +15,27 @@
       "when": 1780515314424,
       "tag": "0001_clear_ghost_rider",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781637570707,
+      "tag": "0002_secret_princess_powerful",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781639574232,
+      "tag": "0003_natural_chimera",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784597509460,
+      "tag": "0004_talented_chimera",
+      "breakpoints": true
     }
   ]
 }

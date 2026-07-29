@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
-import { analyzeRewards, type RewardWindow } from "@/lib/rewards/compute";
+import { Section } from "@/components/Section";
+import { analyzeRewards, type RewardWindow, type RewardsReport } from "@/lib/rewards/compute";
 import { quarterKey, discoverCategoriesFor, MILES_VALUE_CENTS } from "@/lib/rewards/config";
 import { formatCents } from "@/lib/money";
 import { humanizeCategory } from "@/lib/category";
@@ -48,7 +49,7 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
   return (
     <PageShell
       title="Rewards"
-      subtitle={`Computed from current rules. Discover ${quarterKey(now)} 5%: ${
+      subtitle={`Best-card guidance and rewards left on the table. Discover ${quarterKey(now)} 5%: ${
         activeCats.length ? activeCats.map((c) => humanizeCategory(c)).join(", ") : "not announced"
       }. Miles valued at ${MILES_VALUE_CENTS}¢.`}
     >
@@ -72,12 +73,11 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
         })}
       </div>
 
+      {/* At-a-glance summary (always visible) */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
           <div className="text-xs uppercase tracking-wide text-zinc-500">Value earned</div>
-          <div className="mt-1 text-3xl font-semibold tabular-nums">
-            {formatCents(report.totalEarnedCents)}
-          </div>
+          <div className="mt-1 text-3xl font-semibold tabular-nums">{formatCents(report.totalEarnedCents)}</div>
         </div>
         <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
           <div className="text-xs uppercase tracking-wide text-zinc-500">Missed rewards</div>
@@ -87,81 +87,112 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
         </div>
       </div>
 
-      <section className="mt-8">
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Earned per card
-        </h3>
-        <table className="w-full text-sm">
-          <tbody>
-            {report.perCard.map((c) => (
-              <tr key={c.cardId} className="border-t border-zinc-100 dark:border-zinc-800">
-                <td className="py-2">{c.label}</td>
-                <td className="py-2 text-zinc-500">{c.txnCount} purchases</td>
-                <td className="py-2 text-right tabular-nums">{formatCents(c.earnedCents)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <div className="mt-6 space-y-3">
+        <Section title="Which card to use" headline={`${report.guide.length} categories`} defaultOpen>
+          <GuideBody report={report} />
+        </Section>
 
-      <section className="mt-8">
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Which card to use
-        </h3>
-        <table className="w-full text-sm">
-          <tbody>
-            {report.guide.map((g) => (
-              <tr key={g.category} className="border-t border-zinc-100 dark:border-zinc-800">
-                <td className="py-2">
-                  {g.category === "everything else" ? "Everything else" : humanizeCategory(g.category)}
-                </td>
-                <td className="py-2">{g.bestLabel}</td>
-                <td className="py-2 text-right tabular-nums text-zinc-500">
-                  {(g.effectiveBps / 100).toFixed(2)}%
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+        <Section title="Earned per card" headline={formatCents(report.totalEarnedCents)}>
+          <PerCardBody report={report} />
+        </Section>
 
-      <section className="mt-8">
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-          Missed rewards (used a suboptimal card)
-        </h3>
-        {report.missed.length === 0 ? (
-          <p className="text-sm text-zinc-500">No missed rewards — nice.</p>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-            <table className="w-full text-sm">
-              <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Date</th>
-                  <th className="px-3 py-2 font-medium">Merchant</th>
-                  <th className="px-3 py-2 font-medium">Used</th>
-                  <th className="px-3 py-2 font-medium">Should have used</th>
-                  <th className="px-3 py-2 text-right font-medium">Missed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.missed.slice(0, 50).map((m) => (
-                  <tr key={m.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                    <td className="px-3 py-2 whitespace-nowrap text-zinc-500">
-                      {m.postedAt ? m.postedAt.toISOString().slice(0, 10) : "—"}
-                    </td>
-                    <td className="px-3 py-2">{m.label}</td>
-                    <td className="px-3 py-2 text-zinc-500">{m.actualLabel}</td>
-                    <td className="px-3 py-2">{m.optimalLabel}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
-                      {formatCents(m.deltaCents)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+        <Section
+          title="Missed rewards"
+          headline={
+            <span className="text-amber-600 dark:text-amber-400">
+              {report.missed.length === 0 ? "None" : formatCents(report.totalMissedCents)}
+            </span>
+          }
+        >
+          <MissedBody report={report} />
+        </Section>
+      </div>
     </PageShell>
+  );
+}
+
+function GuideBody({ report }: { report: RewardsReport }) {
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-xs uppercase tracking-wide text-zinc-500">
+          <th className="pb-2 font-medium">Category</th>
+          <th className="pb-2 font-medium">Best card</th>
+          <th className="pb-2 text-right font-medium">Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {report.guide.map((g) => (
+          <tr key={g.category} className="border-t border-zinc-100 dark:border-zinc-800">
+            <td className="py-2">{g.category === "everything else" ? "Everything else" : humanizeCategory(g.category)}</td>
+            <td className="py-2">{g.bestLabel}</td>
+            <td className="py-2 text-right tabular-nums text-zinc-500">{(g.effectiveBps / 100).toFixed(2)}%</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function PerCardBody({ report }: { report: RewardsReport }) {
+  return (
+    <table className="w-full text-sm">
+      <tbody>
+        {report.perCard.map((c) => (
+          <tr key={c.cardId} className="border-t border-zinc-100 first:border-t-0 dark:border-zinc-800">
+            <td className="py-2 font-medium">{c.label}</td>
+            <td className="py-2 text-zinc-500">{c.txnCount} purchases</td>
+            <td className="py-2 text-right tabular-nums">{formatCents(c.earnedCents)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function MissedBody({ report }: { report: RewardsReport }) {
+  if (report.missed.length === 0) {
+    return <p className="text-sm text-zinc-500">No missed rewards — you used the best card every time. Nice.</p>;
+  }
+  return (
+    <>
+      <p className="mb-3 text-xs text-zinc-400">
+        Card purchases where a different card you hold would have earned more. Bank transfers and rent aren&rsquo;t
+        card-eligible, so they&rsquo;re excluded.
+      </p>
+      <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <table className="w-full text-sm">
+          <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
+            <tr>
+              <th className="px-3 py-2 font-medium">Date</th>
+              <th className="px-3 py-2 font-medium">Merchant</th>
+              <th className="px-3 py-2 font-medium">Used</th>
+              <th className="px-3 py-2 font-medium">Should have used</th>
+              <th className="px-3 py-2 text-right font-medium">Missed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.missed.slice(0, 50).map((m) => (
+              <tr key={m.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                <td className="px-3 py-2 whitespace-nowrap text-zinc-500">
+                  {m.postedAt ? m.postedAt.toISOString().slice(0, 10) : "—"}
+                </td>
+                <td className="px-3 py-2">{m.label}</td>
+                <td className="px-3 py-2 text-zinc-500">{m.actualLabel}</td>
+                <td className="px-3 py-2">{m.optimalLabel}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
+                  {formatCents(m.deltaCents)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {report.missed.length > 50 ? (
+          <p className="border-t border-zinc-100 px-3 py-2 text-xs text-zinc-400 dark:border-zinc-800">
+            Showing the top 50 of {report.missed.length} by amount.
+          </p>
+        ) : null}
+      </div>
+    </>
   );
 }

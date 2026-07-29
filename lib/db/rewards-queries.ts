@@ -2,8 +2,9 @@ import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { db } from "./client";
 import { cards, accounts, items } from "./schema";
-import type { CardDef, EarnRules } from "@/lib/rewards/catalog";
+import type { CardDef, EarnRules, CapPeriod } from "@/lib/rewards/catalog";
 import type { RewardTag } from "@/lib/rewards/config";
+import type { CardRewardSuggestion } from "@/lib/ai/card-rewards";
 
 /**
  * Card persistence for the rewards engine. Cards live in the DB and are managed
@@ -55,9 +56,12 @@ export interface LoadedCards {
   cardById: Map<string, CardDef>;
 }
 
-/** Load cards from the DB into engine-ready CardDefs + an account->card map. */
+/**
+ * Load engine-ready cards (CONFIRMED only — unconfirmed AI suggestions must not
+ * drive recommendations) + an account->card map.
+ */
 export async function loadCards(): Promise<LoadedCards> {
-  const rows = await db.select().from(cards);
+  const rows = await db.select().from(cards).where(eq(cards.rewardsConfirmed, true));
   const defs: CardDef[] = [];
   const accountToCardId = new Map<string, string>();
   const cardById = new Map<string, CardDef>();
@@ -82,6 +86,14 @@ export async function loadCards(): Promise<LoadedCards> {
 // Card manager CRUD (user-editable cards with per-category cashback rates).
 // ---------------------------------------------------------------------------
 
+export interface RotatingSummary {
+  bonusBps: number;
+  baseBps: number;
+  capCents: number | null;
+  capPeriod: CapPeriod | null;
+  schedule: Record<string, RewardTag[]>;
+}
+
 export interface ManagedCard {
   id: string;
   label: string;
@@ -93,6 +105,13 @@ export interface ManagedCard {
   /** Base rate (bps) for category/flat cards; null for advanced (miles) rules. */
   baseBps: number | null;
   bonuses: Record<string, number>; // reward tag -> bps (category cards only)
+  caps: Record<string, { cents: number; period: CapPeriod }>; // category cards only
+  rotating: RotatingSummary | null;
+  rewardsConfirmed: boolean;
+  annualFeeCents: number | null;
+  signupBonus: string | null;
+  aiNotes: string | null;
+  aiSuggestion: CardRewardSuggestion | null;
 }
 
 export async function listManagedCards(): Promise<ManagedCard[]> {
@@ -105,6 +124,11 @@ export async function listManagedCards(): Promise<ManagedCard[]> {
       earnRules: cards.earnRules,
       accountName: accounts.name,
       institution: items.institutionName,
+      rewardsConfirmed: cards.rewardsConfirmed,
+      annualFeeCents: cards.annualFeeCents,
+      signupBonus: cards.signupBonus,
+      aiNotes: cards.aiNotes,
+      aiSuggestion: cards.aiSuggestion,
     })
     .from(cards)
     .leftJoin(accounts, eq(accounts.id, cards.accountId))
@@ -114,11 +138,23 @@ export async function listManagedCards(): Promise<ManagedCard[]> {
     const rules = r.earnRules as EarnRules;
     let baseBps: number | null = null;
     let bonuses: Record<string, number> = {};
+    let caps: Record<string, { cents: number; period: CapPeriod }> = {};
+    let rotating: RotatingSummary | null = null;
     if (rules.kind === "category") {
       baseBps = rules.baseBps;
       bonuses = { ...rules.bonuses } as Record<string, number>;
+      caps = { ...(rules.caps ?? {}) } as Record<string, { cents: number; period: CapPeriod }>;
     } else if (rules.kind === "flat") {
       baseBps = rules.bps;
+    } else if (rules.kind === "rotating") {
+      baseBps = rules.baseBps;
+      rotating = {
+        bonusBps: rules.bonusBps,
+        baseBps: rules.baseBps,
+        capCents: rules.capCents ?? null,
+        capPeriod: rules.capPeriod ?? null,
+        schedule: rules.schedule ?? {},
+      };
     }
     return {
       id: r.id,
@@ -130,8 +166,55 @@ export async function listManagedCards(): Promise<ManagedCard[]> {
       ruleKind: rules.kind,
       baseBps,
       bonuses,
+      caps,
+      rotating,
+      rewardsConfirmed: r.rewardsConfirmed,
+      annualFeeCents: r.annualFeeCents,
+      signupBonus: r.signupBonus,
+      aiNotes: r.aiNotes,
+      aiSuggestion: (r.aiSuggestion as CardRewardSuggestion | null) ?? null,
     };
   });
+}
+
+/** Minimal fetch for the AI lookup (needs the card's name). */
+export async function getCardById(id: string): Promise<{ id: string; label: string } | undefined> {
+  const [row] = await db.select({ id: cards.id, label: cards.label }).from(cards).where(eq(cards.id, id)).limit(1);
+  return row;
+}
+
+/** Cache the AI suggestion for a card so the confirm UI can render it. */
+export async function setCardSuggestion(id: string, suggestion: CardRewardSuggestion): Promise<void> {
+  await db.update(cards).set({ aiSuggestion: suggestion }).where(eq(cards.id, id));
+}
+
+/** The server-trusted cached AI suggestion for a card. */
+export async function getCardSuggestion(id: string): Promise<CardRewardSuggestion | null> {
+  const [row] = await db.select({ s: cards.aiSuggestion }).from(cards).where(eq(cards.id, id)).limit(1);
+  return (row?.s as CardRewardSuggestion | null) ?? null;
+}
+
+export interface ConfirmCardInput {
+  earnRules: EarnRules;
+  annualFeeCents: number | null;
+  signupBonus: string | null;
+  notes: string | null;
+  cashbackMatchYearOne: boolean;
+}
+
+/** Apply confirmed rewards and mark the card confirmed (so it counts now). */
+export async function confirmCard(id: string, input: ConfirmCardInput): Promise<void> {
+  await db
+    .update(cards)
+    .set({
+      earnRules: input.earnRules,
+      annualFeeCents: input.annualFeeCents,
+      signupBonus: input.signupBonus,
+      aiNotes: input.notes,
+      cashbackMatchYearOne: input.cashbackMatchYearOne,
+      rewardsConfirmed: true,
+    })
+    .where(eq(cards.id, id));
 }
 
 export interface CreditAccountOption {

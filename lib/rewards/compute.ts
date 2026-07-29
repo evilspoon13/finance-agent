@@ -3,7 +3,13 @@ import { db } from "@/lib/db/client";
 import { transactions } from "@/lib/db/schema";
 import { loadCards } from "@/lib/db/rewards-queries";
 import { deriveTags } from "./tags";
-import { bestCard, evaluateCard, type RewardContext } from "./engine";
+import {
+  bestCard,
+  evaluateCard,
+  matchedCategoryTag,
+  rotatingActive,
+  type RewardContext,
+} from "./engine";
 import {
   DISCOVER_CAP_CENTS,
   MILES_VALUE_CENTS,
@@ -11,7 +17,26 @@ import {
   quarterKey,
   type RewardTag,
 } from "./config";
-import type { CardDef } from "./catalog";
+import type { CardDef, CapPeriod } from "./catalog";
+
+/** Cap definition for a card's bonus (capKey = a reward tag, or "rotating"). */
+function capInfo(card: CardDef, capKey: string): { cents: number; period: CapPeriod } | null {
+  const r = card.earnRules;
+  if (r.kind === "rotating" && capKey === "rotating") {
+    return { cents: r.capCents ?? DISCOVER_CAP_CENTS, period: r.capPeriod ?? "quarter" };
+  }
+  if (r.kind === "category" && r.caps) {
+    const c = r.caps[capKey as RewardTag];
+    if (c) return { cents: c.cents, period: c.period };
+  }
+  return null;
+}
+
+function periodKeyFor(period: CapPeriod, date: Date): string {
+  if (period === "year") return String(date.getUTCFullYear());
+  if (period === "month") return `${date.getUTCFullYear()}-${date.getUTCMonth()}`;
+  return quarterKey(date);
+}
 
 /**
  * Chronological, cap-aware pass over real purchases. For each purchase it
@@ -132,9 +157,36 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
 
   const purchases = await loadPurchases();
 
-  const discoverCard = cards.find((c) => c.earnRules.kind === "rotating");
-  // Discover bonus-category spend consumed per quarter (drives remaining cap).
-  const bonusSpentByQuarter = new Map<string, number>();
+  // Generic cap accounting: cardId -> capKey -> periodKey -> bonus-eligible cents
+  // already consumed by ACTUAL spend on that card (drives remaining cap).
+  const capSpent = new Map<string, Map<string, Map<string, number>>>();
+  const getSpent = (cardId: string, capKey: string, pk: string) =>
+    capSpent.get(cardId)?.get(capKey)?.get(pk) ?? 0;
+  const addSpent = (cardId: string, capKey: string, pk: string, cents: number) => {
+    const byKey = capSpent.get(cardId) ?? new Map<string, Map<string, number>>();
+    capSpent.set(cardId, byKey);
+    const byPeriod = byKey.get(capKey) ?? new Map<string, number>();
+    byKey.set(capKey, byPeriod);
+    byPeriod.set(pk, (byPeriod.get(pk) ?? 0) + cents);
+  };
+
+  /** Consume a card's cap from actual bonus-eligible spend put on it. */
+  const consumeCaps = (card: CardDef, ts: Set<RewardTag>, amountCents: number, when: Date) => {
+    const r = card.earnRules;
+    let capKey: string | null = null;
+    if (r.kind === "rotating") {
+      const active = rotatingActive(r, when, new Set(discoverCategoriesFor(when)));
+      if ([...ts].some((tag) => active.has(tag))) capKey = "rotating";
+    } else if (r.kind === "category" && r.caps) {
+      const chosen = matchedCategoryTag(r, ts);
+      if (chosen && r.caps[chosen]) capKey = chosen;
+    }
+    if (!capKey) return;
+    const info = capInfo(card, capKey)!;
+    const pk = periodKeyFor(info.period, when);
+    const remaining = Math.max(0, info.cents - getSpent(card.id, capKey, pk));
+    addSpent(card.id, capKey, pk, Math.min(amountCents, remaining));
+  };
 
   const results: TxnResult[] = [];
   const earnedByCard = new Map<string, { cents: number; count: number }>();
@@ -144,11 +196,17 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
 
   for (const t of purchases) {
     const when = t.postedAt ?? new Date();
-    const qk = quarterKey(when);
-    const spent = bonusSpentByQuarter.get(qk) ?? 0;
+    const capRemaining = (cardId: string, capKey: string) => {
+      const c = cardById.get(cardId);
+      if (!c) return Infinity;
+      const info = capInfo(c, capKey);
+      if (!info) return Infinity;
+      return Math.max(0, info.cents - getSpent(cardId, capKey, periodKeyFor(info.period, when)));
+    };
     const ctx: RewardContext = {
+      date: when,
       discoverActive: new Set(discoverCategoriesFor(when)),
-      discoverCapRemainingCents: Math.max(0, DISCOVER_CAP_CENTS - spent),
+      capRemaining,
       milesValueCents: MILES_VALUE_CENTS,
     };
 
@@ -174,8 +232,12 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
         totalEarned += actualValue;
       }
 
-      // Missed: a different card would have beaten the one used.
-      if (delta > 0 && best.cardId !== actualCardId) {
+      // Missed: a different card would have beaten the one ACTUALLY USED. Only
+      // meaningful when a card was used — bank/savings outflows (rent, transfers,
+      // withdrawals, Zelle) aren't card-eligible, so "you should've used Discover"
+      // there is nonsense. Plaid mis-categorizes some of those into spend
+      // categories, so gating on a real card is what filters them out.
+      if (actualCardId && delta > 0 && best.cardId !== actualCardId) {
         totalMissed += delta;
         missed.push({
           id: t.id,
@@ -189,14 +251,8 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
       }
     }
 
-    // Consume the cap from actual Discover-card spend in active categories.
-    if (
-      discoverCard &&
-      actualCardId === discoverCard.id &&
-      [...tags].some((tag) => ctx.discoverActive.has(tag))
-    ) {
-      bonusSpentByQuarter.set(qk, spent + t.amountCents);
-    }
+    // Consume each card's caps from the actual spend put on it.
+    if (actualCard) consumeCaps(actualCard, tags, t.amountCents, when);
   }
 
   const perCard: PerCardSummary[] = cards.map((c) => ({
@@ -239,8 +295,9 @@ const GUIDE_CATEGORIES: (RewardTag | "everything else")[] = [
 
 function buildGuide(cards: CardDef[], cardById: Map<string, CardDef>): GuideRow[] {
   const ctx: RewardContext = {
+    date: new Date(),
     discoverActive: new Set(discoverCategoriesFor(new Date())),
-    discoverCapRemainingCents: DISCOVER_CAP_CENTS,
+    capRemaining: () => Infinity,
     milesValueCents: MILES_VALUE_CENTS,
   };
   return GUIDE_CATEGORIES.map((cat) => {

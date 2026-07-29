@@ -1,6 +1,12 @@
 import { and, gte, lte, eq, inArray, ilike, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "./client";
 import { accounts, transactions, holdings, cards, type Account } from "./schema";
+import {
+  P2P_OUT_DETAILED,
+  P2P_IN_DETAILED,
+  effectiveCategory,
+  spendRowPredicate,
+} from "./spend-sql";
 
 /** pfc_detailed filter accepting one subcategory or a set (e.g. all dining types). */
 function detailedClause(detailed?: string | string[]): SQL | undefined {
@@ -105,35 +111,199 @@ export async function getNetWorth(): Promise<NetWorth> {
   };
 }
 
+export interface PortfolioHolding {
+  ticker: string | null;
+  name: string;
+  account: string;
+  quantity: string;
+  valueCents: number;
+  costBasisCents: number | null;
+  gainCents: number | null; // value − cost (null when no cost basis, e.g. cash)
+  gainPct: number | null;
+  pctOfPortfolio: number; // share of total market value
+}
+export interface Portfolio {
+  totalValueCents: number;
+  totalCostCents: number; // summed only over holdings that have a cost basis
+  totalGainCents: number; // value − cost over those same holdings
+  totalGainPct: number | null;
+  holdings: PortfolioHolding[];
+}
+
+/**
+ * Investment holdings with per-position gain/loss and allocation. Holdings are a
+ * current snapshot (Plaid /investments/holdings) — there is no trade history, but
+ * cost basis lets us show unrealized return. Cash-like positions (no cost basis)
+ * count toward value/allocation but not gain.
+ */
+export async function getPortfolio(): Promise<Portfolio> {
+  const rows = await db
+    .select({
+      ticker: holdings.ticker,
+      name: holdings.name,
+      account: accounts.name,
+      quantity: holdings.quantity,
+      valueCents: holdings.valueCents,
+      costBasisCents: holdings.costBasisCents,
+    })
+    .from(holdings)
+    .innerJoin(accounts, eq(accounts.id, holdings.accountId))
+    .orderBy(sql`${holdings.valueCents} desc`);
+
+  const totalValue = rows.reduce((s, r) => s + r.valueCents, 0);
+  let costWithBasis = 0;
+  let valueWithBasis = 0;
+  for (const r of rows) {
+    if (r.costBasisCents != null) {
+      costWithBasis += r.costBasisCents;
+      valueWithBasis += r.valueCents;
+    }
+  }
+  const totalGain = valueWithBasis - costWithBasis;
+
+  const out: PortfolioHolding[] = rows.map((r) => {
+    const gainCents = r.costBasisCents != null ? r.valueCents - r.costBasisCents : null;
+    const gainPct =
+      r.costBasisCents && r.costBasisCents > 0 ? ((r.valueCents - r.costBasisCents) / r.costBasisCents) * 100 : null;
+    return {
+      ticker: r.ticker,
+      name: r.name,
+      account: r.account,
+      quantity: r.quantity,
+      valueCents: r.valueCents,
+      costBasisCents: r.costBasisCents,
+      gainCents,
+      gainPct,
+      pctOfPortfolio: totalValue > 0 ? (r.valueCents / totalValue) * 100 : 0,
+    };
+  });
+
+  return {
+    totalValueCents: totalValue,
+    totalCostCents: costWithBasis,
+    totalGainCents: totalGain,
+    totalGainPct: costWithBasis > 0 ? (totalGain / costWithBasis) * 100 : null,
+    holdings: out,
+  };
+}
+
+export interface Paycheck {
+  postedAt: Date | null;
+  employer: string;
+  amountCents: number; // net deposit (positive)
+}
+export interface IncomeTypeTotal {
+  type: string; // pfc_detailed, e.g. INCOME_SALARY
+  cents: number;
+}
+export interface IncomeSummary {
+  ytdCents: number; // all income this calendar year (net deposits)
+  last12moCents: number;
+  ytdByType: IncomeTypeTotal[];
+  paychecks: Paycheck[]; // INCOME_SALARY deposits, most recent first
+}
+
+/**
+ * Employer paychecks + income summary, derived from `INCOME` transactions. These
+ * are NET deposits — Plaid transactions don't carry gross pay, taxes, or 401(k)
+ * deductions. Income rows are stored as inflows (amount < 0); we flip the sign.
+ *
+ * Only depository (bank) accounts count: an "income" entry on a credit-card
+ * account is a statement credit / DirectPay artifact, not money earned.
+ */
+export async function getIncomeSummary(now = new Date()): Promise<IncomeSummary> {
+  const yearStart = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+  const twelveMoAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 12, now.getUTCDate()));
+  const bankOnly = sql`${transactions.accountId} in (select ${accounts.id} from ${accounts} where ${accounts.type} = 'depository')`;
+  const incomeBase = and(eq(transactions.pfcPrimary, "INCOME"), eq(transactions.pending, false), bankOnly);
+
+  const ytdRows = await db
+    .select({
+      det: transactions.pfcDetailed,
+      cents: sql<number>`-sum(${transactions.amountCents})::int`,
+    })
+    .from(transactions)
+    .where(and(incomeBase, gte(transactions.postedAt, yearStart)))
+    .groupBy(transactions.pfcDetailed)
+    .orderBy(sql`sum(${transactions.amountCents}) asc`);
+  const ytdByType: IncomeTypeTotal[] = ytdRows.map((r) => ({ type: r.det ?? "INCOME", cents: r.cents ?? 0 }));
+  const ytdCents = ytdByType.reduce((s, r) => s + r.cents, 0);
+
+  const [l12] = await db
+    .select({ cents: sql<number>`-coalesce(sum(${transactions.amountCents}), 0)::int` })
+    .from(transactions)
+    .where(and(incomeBase, gte(transactions.postedAt, twelveMoAgo)));
+
+  const payRows = await db
+    .select({
+      postedAt: transactions.postedAt,
+      employer: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      cents: sql<number>`-${transactions.amountCents}`,
+    })
+    .from(transactions)
+    .where(and(eq(transactions.pfcDetailed, "INCOME_SALARY"), eq(transactions.pending, false), bankOnly))
+    .orderBy(sql`${transactions.postedAt} desc`)
+    .limit(24);
+
+  return {
+    ytdCents,
+    last12moCents: l12?.cents ?? 0,
+    ytdByType,
+    paychecks: payRows.map((r) => ({ postedAt: r.postedAt, employer: r.employer, amountCents: r.cents })),
+  };
+}
+
 export interface SpendingFilter {
   from?: Date;
   to?: Date;
   accountId?: string;
 }
 
-// Categories that represent money movement, not consumption. Excluded from
-// spending views so inter-account transfers and credit-card payments don't
-// inflate totals or double-count card purchases. (Mortgage/auto/student-loan
-// payments stay in — only the credit-card-payment detail is dropped.)
-const NON_SPEND_PRIMARY = ["TRANSFER_IN", "TRANSFER_OUT"];
-const NON_SPEND_DETAILED = ["LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"];
-
+// What counts as spending — normal purchases plus user-categorized peer-to-peer
+// payments — lives in spend-sql so the dashboard and AI agent agree. Transfers
+// and credit-card payments stay out (they'd double-count or aren't consumption),
+// except a P2P app payment the user has tagged with a real budget category.
 function spendingWhere(f: SpendingFilter): SQL | undefined {
   const clauses: SQL[] = [
     // Outflows only (positive = money leaving the account).
     sql`${transactions.amountCents} > 0`,
     sql`${transactions.pending} = false`,
+    spendRowPredicate(),
   ];
-  for (const p of NON_SPEND_PRIMARY) {
-    clauses.push(sql`coalesce(${transactions.pfcPrimary}, '') <> ${p}`);
-  }
-  for (const d of NON_SPEND_DETAILED) {
-    clauses.push(sql`coalesce(${transactions.pfcDetailed}, '') <> ${d}`);
-  }
   if (f.from) clauses.push(gte(transactions.postedAt, f.from));
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
   return and(...clauses);
+}
+
+export interface SpendTotal {
+  totalCents: number;
+  count: number;
+}
+
+/**
+ * Exact spend total + transaction count for a scope (optionally narrowed to a
+ * primary category or a set of detailed codes). Uses the same outflow-only,
+ * transfer-excluding rules as the dashboard so the AI's totals match the UI.
+ */
+export async function spendingTotal(
+  f: SpendingFilter & { category?: string; detailed?: string | string[] } = {},
+): Promise<SpendTotal> {
+  const clauses: SQL[] = [];
+  const base = spendingWhere(f);
+  if (base) clauses.push(base);
+  if (f.category) clauses.push(sql`${effectiveCategory} = ${f.category}`);
+  const det = detailedClause(f.detailed);
+  if (det) clauses.push(det);
+
+  const [row] = await db
+    .select({
+      totalCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::int`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(transactions)
+    .where(and(...clauses));
+  return { totalCents: row?.totalCents ?? 0, count: row?.count ?? 0 };
 }
 
 export interface CategorySpend {
@@ -145,13 +315,13 @@ export interface CategorySpend {
 export async function spendingByCategory(f: SpendingFilter = {}): Promise<CategorySpend[]> {
   const rows = await db
     .select({
-      category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+      category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
       totalCents: sql<number>`sum(${transactions.amountCents})::int`,
       count: sql<number>`count(*)::int`,
     })
     .from(transactions)
     .where(spendingWhere(f))
-    .groupBy(sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`)
+    .groupBy(sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`)
     .orderBy(sql`sum(${transactions.amountCents}) desc`);
   return rows.map((r) => ({ category: r.category, totalCents: r.totalCents ?? 0, count: r.count }));
 }
@@ -216,6 +386,7 @@ export interface TxnRow {
   merchantName: string | null;
   accountName: string;
   category: string | null;
+  memo: string | null; // user note on a categorized P2P payment
   amountCents: number;
   pending: boolean;
 }
@@ -225,7 +396,7 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
   if (f.from) clauses.push(gte(transactions.postedAt, f.from));
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
-  if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.category) clauses.push(sql`${effectiveCategory} = ${f.category}`);
   const det = detailedClause(f.detailed);
   if (det) clauses.push(det);
   if (f.search) {
@@ -240,7 +411,8 @@ export async function listTransactions(f: TxnFilter = {}): Promise<TxnRow[]> {
       name: transactions.name,
       merchantName: transactions.merchantName,
       accountName: displayName,
-      category: transactions.pfcPrimary,
+      category: effectiveCategory,
+      memo: transactions.userMemo,
       amountCents: transactions.amountCents,
       pending: transactions.pending,
     })
@@ -301,16 +473,16 @@ export async function spendingDrilldown(
   const [primaryRows, detailedRows, merchantRows] = await Promise.all([
     db
       .select({
-        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         totalCents: sql<number>`sum(${transactions.amountCents})::int`,
         count: sql<number>`count(*)::int`,
       })
       .from(transactions)
       .where(spendingWhere(f))
-      .groupBy(sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`),
+      .groupBy(sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`),
     db
       .select({
-        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         detailed: sql<string>`coalesce(${transactions.pfcDetailed}, 'OTHER')`,
         totalCents: sql<number>`sum(${transactions.amountCents})::int`,
         count: sql<number>`count(*)::int`,
@@ -318,12 +490,12 @@ export async function spendingDrilldown(
       .from(transactions)
       .where(spendingWhere(f))
       .groupBy(
-        sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         sql`coalesce(${transactions.pfcDetailed}, 'OTHER')`,
       ),
     db
       .select({
-        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
         totalCents: sql<number>`sum(${transactions.amountCents})::int`,
         count: sql<number>`count(*)::int`,
@@ -331,7 +503,7 @@ export async function spendingDrilldown(
       .from(transactions)
       .where(spendingWhere(f))
       .groupBy(
-        sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         sql`coalesce(${transactions.merchantName}, ${transactions.name})`,
       ),
   ]);
@@ -342,12 +514,12 @@ export async function spendingDrilldown(
   if (prev) {
     const prevRows = await db
       .select({
-        category: sql<string>`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`,
+        category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         totalCents: sql<number>`sum(${transactions.amountCents})::int`,
       })
       .from(transactions)
       .where(spendingWhere({ from: prev.from, to: prev.to, accountId: f.accountId }))
-      .groupBy(sql`coalesce(${transactions.pfcPrimary}, 'UNCATEGORIZED')`);
+      .groupBy(sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`);
     for (const r of prevRows) prevByCategory.set(r.category, r.totalCents ?? 0);
   }
 
@@ -415,7 +587,7 @@ export async function topMerchants(
   const clauses: SQL[] = [];
   const base = spendingWhere(f);
   if (base) clauses.push(base);
-  if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.category) clauses.push(sql`${effectiveCategory} = ${f.category}`);
   const det = detailedClause(f.detailed);
   if (det) clauses.push(det);
 
@@ -445,7 +617,7 @@ export async function countTransactions(f: TxnFilter = {}): Promise<number> {
   if (f.from) clauses.push(gte(transactions.postedAt, f.from));
   if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
-  if (f.category) clauses.push(eq(transactions.pfcPrimary, f.category));
+  if (f.category) clauses.push(sql`${effectiveCategory} = ${f.category}`);
   if (f.search) {
     const q = `%${f.search}%`;
     clauses.push(sql`(${ilike(transactions.name, q)} or ${ilike(transactions.merchantName, q)})`);
@@ -464,4 +636,149 @@ export async function listAccountsForFilter(): Promise<Pick<Account, "id" | "nam
     .from(accounts)
     .leftJoin(cards, eq(cards.accountId, accounts.id))
     .orderBy(accounts.name);
+}
+
+// Peer-to-peer app payments (Venmo/Zelle/CashApp), both directions. Detailed
+// codes live in spend-sql. A payment the user has categorized has been promoted
+// to real spend, so it drops out of the net view below (no double-counting);
+// what remains here is reimbursements plus outgoing payments not yet reviewed.
+
+export interface P2PTxn {
+  name: string;
+  amountCents: number; // >0 sent, <0 received
+  postedAt: Date | null;
+}
+export interface P2PNet {
+  outCents: number; // total sent (>=0)
+  inCents: number; // total received (<=0)
+  netCents: number; // out + in = net out-of-pocket
+  outCount: number;
+  inCount: number;
+  transactions: P2PTxn[];
+}
+
+/** Time/account scoping shared by the P2P + excluded-bucket helpers (no spend filter). */
+function timeAccountClauses(f: SpendingFilter): SQL[] {
+  const clauses: SQL[] = [sql`${transactions.pending} = false`];
+  if (f.from) clauses.push(gte(transactions.postedAt, f.from));
+  if (f.to) clauses.push(lte(transactions.postedAt, f.to));
+  if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
+  return clauses;
+}
+
+/**
+ * Net peer-to-peer spending: money sent via apps minus money received back
+ * (reimbursements). Only app-to-app is netted — cross-channel reimbursements
+ * (e.g. a bank deposit) are intentionally NOT offset here. See the budgets page.
+ */
+export async function peerToPeerNet(f: SpendingFilter = {}): Promise<P2PNet> {
+  const clauses = timeAccountClauses(f);
+  clauses.push(sql`${transactions.pfcDetailed} in (${P2P_OUT_DETAILED}, ${P2P_IN_DETAILED})`);
+  // Categorized/ignored outgoing payments have been handled — exclude them so
+  // they aren't counted a second time here.
+  clauses.push(sql`${transactions.userCategory} is null`);
+  const rows = await db
+    .select({
+      name: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      amountCents: transactions.amountCents,
+      postedAt: transactions.postedAt,
+    })
+    .from(transactions)
+    .where(and(...clauses))
+    .orderBy(sql`${transactions.amountCents} desc`);
+
+  let outCents = 0;
+  let inCents = 0;
+  let outCount = 0;
+  let inCount = 0;
+  for (const r of rows) {
+    if (r.amountCents > 0) {
+      outCents += r.amountCents;
+      outCount++;
+    } else if (r.amountCents < 0) {
+      inCents += r.amountCents;
+      inCount++;
+    }
+  }
+  return { outCents, inCents, netCents: outCents + inCents, outCount, inCount, transactions: rows };
+}
+
+export interface ExcludedSummary {
+  internalTransfersCents: number; // non-P2P transfers out (savings, investing, account moves)
+  ccPaymentsCents: number; // credit-card payments (purchases already counted on the card)
+  inflowsCents: number; // money in (income, refunds, deposits), excluding P2P reimbursements
+}
+
+/**
+ * Everything the budgets page does NOT count as spending, bucketed — so the page
+ * can show where 100% of the month's money movement went (nothing silently dropped).
+ */
+export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedSummary> {
+  const where = and(...timeAccountClauses(f));
+  const [row] = await db
+    .select({
+      internal: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcPrimary}, '') in ('TRANSFER_OUT', 'TRANSFER_IN') and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_OUT_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
+      cc: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcDetailed}, '') = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' then ${transactions.amountCents} else 0 end), 0)::int`,
+      inflow: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_IN_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
+    })
+    .from(transactions)
+    .where(where);
+  return {
+    internalTransfersCents: row?.internal ?? 0,
+    ccPaymentsCents: row?.cc ?? 0,
+    inflowsCents: row?.inflow ?? 0,
+  };
+}
+
+export interface UncategorizedP2P {
+  id: string;
+  name: string; // merchant/counterparty, e.g. the person paid
+  amountCents: number; // > 0 (outflow)
+  postedAt: Date | null;
+  accountName: string;
+}
+
+/**
+ * Outgoing peer-to-peer app payments the user hasn't reviewed yet
+ * (user_category IS NULL). These are the rows the categorize screen works
+ * through. Only outflows — received money stays a reimbursement (see spec).
+ */
+export async function listUncategorizedP2P(limit = 100): Promise<UncategorizedP2P[]> {
+  return db
+    .select({
+      id: transactions.id,
+      name: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      amountCents: transactions.amountCents,
+      postedAt: transactions.postedAt,
+      accountName: displayName,
+    })
+    .from(transactions)
+    .innerJoin(accounts, eq(accounts.id, transactions.accountId))
+    .leftJoin(cards, eq(cards.accountId, transactions.accountId))
+    .where(
+      and(
+        eq(transactions.pfcDetailed, P2P_OUT_DETAILED),
+        eq(transactions.pending, false),
+        sql`${transactions.amountCents} > 0`,
+        sql`${transactions.userCategory} is null`,
+      ),
+    )
+    .orderBy(desc(transactions.postedAt))
+    .limit(limit);
+}
+
+/** How many outgoing P2P payments still need a category (drives the banner). */
+export async function countUncategorizedP2P(): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(transactions)
+    .where(
+      and(
+        eq(transactions.pfcDetailed, P2P_OUT_DETAILED),
+        eq(transactions.pending, false),
+        sql`${transactions.amountCents} > 0`,
+        sql`${transactions.userCategory} is null`,
+      ),
+    );
+  return row?.n ?? 0;
 }

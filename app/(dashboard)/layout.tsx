@@ -1,4 +1,6 @@
 import { Nav } from "@/components/Nav";
+import { ChatDock } from "@/components/ai/ChatDock";
+import { P2PReviewBanner } from "@/components/P2PReviewBanner";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -9,7 +11,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Nav />
         </div>
       </header>
+      <P2PReviewBanner />
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
+      <ChatDock />
     </>
   );
 }

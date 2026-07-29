@@ -17,10 +17,12 @@ export function FilterBar({
   accounts = [],
   categories = [],
   showSearch = false,
+  showDates = true,
 }: {
   accounts?: FilterOption[];
   categories?: FilterOption[];
   showSearch?: boolean;
+  showDates?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -90,24 +92,28 @@ export function FilterBar({
         </label>
       ) : null}
 
-      <label className="flex flex-col gap-1 text-xs text-zinc-500">
-        From
-        <input
-          type="date"
-          defaultValue={params.get("from") ?? ""}
-          onChange={(e) => setParam("from", e.target.value)}
-          className={inputClass}
-        />
-      </label>
-      <label className="flex flex-col gap-1 text-xs text-zinc-500">
-        To
-        <input
-          type="date"
-          defaultValue={params.get("to") ?? ""}
-          onChange={(e) => setParam("to", e.target.value)}
-          className={inputClass}
-        />
-      </label>
+      {showDates ? (
+        <>
+          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            From
+            <input
+              type="date"
+              defaultValue={params.get("from") ?? ""}
+              onChange={(e) => setParam("from", e.target.value)}
+              className={inputClass}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            To
+            <input
+              type="date"
+              defaultValue={params.get("to") ?? ""}
+              onChange={(e) => setParam("to", e.target.value)}
+              className={inputClass}
+            />
+          </label>
+        </>
+      ) : null}
     </div>
   );
 }
