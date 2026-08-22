@@ -1,7 +1,19 @@
 import { eq, inArray } from "drizzle-orm";
-import type { Transaction as PlaidTransaction, Holding as PlaidHolding, Security } from "plaid";
+import type {
+  Transaction as PlaidTransaction,
+  Holding as PlaidHolding,
+  Security,
+  InvestmentTransaction as PlaidInvestmentTransaction,
+} from "plaid";
 import { db } from "./client";
-import { transactions, holdings, accounts, type NewTransaction } from "./schema";
+import {
+  transactions,
+  holdings,
+  investmentTransactions,
+  accounts,
+  type NewTransaction,
+  type NewInvestmentTransaction,
+} from "./schema";
 import { dollarsToCents } from "@/lib/money";
 
 /**
@@ -81,6 +93,63 @@ export async function applyRemovals(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   await db.delete(transactions).where(inArray(transactions.id, ids));
   return ids.length;
+}
+
+/**
+ * Upsert investment transactions keyed on Plaid's stable
+ * investment_transaction_id (idempotent across re-syncs). Security ticker/name
+ * are denormalized from the securities list for display.
+ */
+export async function applyInvestmentTransactions(
+  invTxns: PlaidInvestmentTransaction[],
+  securities: Security[],
+): Promise<number> {
+  if (invTxns.length === 0) return 0;
+  const securityById = new Map(securities.map((s) => [s.security_id, s]));
+
+  for (const it of invTxns) {
+    const sec = it.security_id ? securityById.get(it.security_id) : undefined;
+    const row: NewInvestmentTransaction = {
+      id: it.investment_transaction_id,
+      accountId: it.account_id,
+      securityId: it.security_id ?? null,
+      ticker: sec?.ticker_symbol ?? null,
+      securityName: sec?.name ?? null,
+      name: it.name,
+      type: String(it.type),
+      subtype: it.subtype ? String(it.subtype) : null,
+      quantity: String(it.quantity),
+      priceCents: dollarsToCents(it.price),
+      amountCents: dollarsToCents(it.amount), // positive = cash out (buy)
+      feesCents: it.fees == null ? null : dollarsToCents(it.fees),
+      isoCurrency: it.iso_currency_code ?? "USD",
+      postedAt: toDate(it.transaction_datetime ?? it.date),
+      updatedAt: new Date(),
+    };
+    await db
+      .insert(investmentTransactions)
+      .values(row)
+      .onConflictDoUpdate({
+        target: investmentTransactions.id,
+        set: {
+          accountId: row.accountId,
+          securityId: row.securityId,
+          ticker: row.ticker,
+          securityName: row.securityName,
+          name: row.name,
+          type: row.type,
+          subtype: row.subtype,
+          quantity: row.quantity,
+          priceCents: row.priceCents,
+          amountCents: row.amountCents,
+          feesCents: row.feesCents,
+          isoCurrency: row.isoCurrency,
+          postedAt: row.postedAt,
+          updatedAt: new Date(),
+        },
+      });
+  }
+  return invTxns.length;
 }
 
 /** Update cached balances for an account (cents). */

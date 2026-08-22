@@ -7,8 +7,10 @@ import {
   listAccountsForFilter,
   peerToPeerNet,
   excludedSummary,
+  amortizedCharges,
   type DetailedSpend,
   type MerchantSpend,
+  type AmortizedCharge,
 } from "@/lib/db/analytics";
 import { formatCents } from "@/lib/money";
 import { humanizeCategory, BUDGETABLE_CATEGORIES } from "@/lib/category";
@@ -32,6 +34,7 @@ interface Row {
   tag?: string; // overrides the "No budget"/"Not budgetable" chip
   noTxnLink?: boolean; // synthetic rows (P2P) have no category-filtered txn view
   reviewHref?: string; // P2P card links to the categorize screen instead
+  amortized: AmortizedCharge[]; // lump premiums this month is only paying a share of
 }
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -74,13 +77,19 @@ export default async function BudgetsPage(props: {
     timeZone: "UTC",
   });
 
-  const [drill, budgets, accountOpts, p2p, excluded] = await Promise.all([
+  const [drill, budgets, accountOpts, p2p, excluded, amortized] = await Promise.all([
     spendingDrilldown({ from, to, accountId }),
     listBudgets(),
     listAccountsForFilter(),
     peerToPeerNet({ from, to, accountId }),
     excludedSummary({ from, to, accountId }),
+    amortizedCharges({ from, to, accountId }),
   ]);
+
+  const amortizedByCat = new Map<string, AmortizedCharge[]>();
+  for (const a of amortized) {
+    amortizedByCat.set(a.category, [...(amortizedByCat.get(a.category) ?? []), a]);
+  }
 
   // ── Merge spend (every category) with budgets (limits) into one card list ──
   const budgetByCat = new Map(budgets.map((b) => [b.category, b]));
@@ -98,6 +107,7 @@ export default async function BudgetsPage(props: {
       topMerchants: c.topMerchants,
       trendPct: c.trendPct,
       budgetable: BUDGETABLE.has(c.category),
+      amortized: amortizedByCat.get(c.category) ?? [],
     });
     seen.add(c.category);
   }
@@ -114,6 +124,7 @@ export default async function BudgetsPage(props: {
       topMerchants: [],
       trendPct: null,
       budgetable: true,
+      amortized: amortizedByCat.get(b.category) ?? [],
     });
   }
   // Net peer-to-peer (Venmo/Zelle/CashApp): sent minus reimbursements. Shown as
@@ -140,6 +151,7 @@ export default async function BudgetsPage(props: {
       tag: "Uncategorized — net of reimbursements",
       noTxnLink: true,
       reviewHref: "/review",
+      amortized: [],
     });
   }
 
@@ -323,6 +335,22 @@ export default async function BudgetsPage(props: {
             <span>Money in (income, refunds, deposits)</span>
             <span className="tabular-nums">{formatCents(excluded.inflowsCents)}</span>
           </li>
+          {excluded.ignoredCents !== 0 ? (
+            <li className="flex justify-between">
+              <span>Marked &ldquo;not spending&rdquo; by you</span>
+              <span className="tabular-nums">{formatCents(excluded.ignoredCents)}</span>
+            </li>
+          ) : null}
+          {excluded.deferredCents !== 0 ? (
+            <li className="flex justify-between">
+              <span>
+                {excluded.deferredCents > 0
+                  ? "Premiums paid now, budgeted to later months"
+                  : "Premium paid in an earlier month, budgeted to this one"}
+              </span>
+              <span className="tabular-nums">{formatCents(excluded.deferredCents)}</span>
+            </li>
+          ) : null}
         </ul>
       </div>
     </PageShell>
@@ -355,6 +383,11 @@ function CategoryCard({
             <span className="flex items-center gap-2 font-medium">
               <span className="text-zinc-400 transition-transform group-open:rotate-90">▶</span>
               {humanizeCategory(r.category)}
+              {r.amortized.length > 0 ? (
+                <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-normal text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300">
+                  Premium spread monthly
+                </span>
+              ) : null}
               {!hasBudget ? (
                 <span className="rounded-full border border-zinc-200 px-2 py-0.5 text-xs font-normal text-zinc-400 dark:border-zinc-700">
                   {r.tag ?? (r.budgetable ? "No budget" : "Not budgetable")}
@@ -384,6 +417,24 @@ function CategoryCard({
 
         {/* Breakdown + budget controls */}
         <div className="border-t border-zinc-100 px-4 py-4 dark:border-zinc-800">
+          {r.amortized.length > 0 ? (
+            <div className="mb-4 rounded-md border border-sky-200 bg-sky-50/60 px-3 py-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">
+              <p className="mb-1 font-semibold">Paid up front, budgeted monthly</p>
+              <ul className="space-y-0.5">
+                {r.amortized.map((a) => (
+                  <li key={`${a.merchant}-${a.postedAt?.toISOString() ?? ""}`}>
+                    {a.merchant}: <span className="tabular-nums">{formatCents(a.windowCents)}</span> this month —
+                    month {a.monthIndex} of {a.months} of a{" "}
+                    <span className="tabular-nums">{formatCents(a.totalCents)}</span> {a.months}-month premium
+                    {a.postedAt
+                      ? ` paid ${a.postedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {hasBreakdown ? (
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div>

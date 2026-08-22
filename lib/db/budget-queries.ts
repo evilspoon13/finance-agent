@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { eq, and, gt, gte, sql } from "drizzle-orm";
+import { eq, and, gt, sql } from "drizzle-orm";
 import { db } from "./client";
 import { budgets, transactions, type Budget } from "./schema";
-import { effectiveCategory, spendRowPredicate } from "./spend-sql";
+import { effectiveCategory, spendRowPredicate, windowAmountCents, inWindow } from "./spend-sql";
 
 /**
  * Budget CRUD plus current-month progress (spent vs limit per category).
@@ -62,18 +62,21 @@ export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]
   if (all.length === 0) return [];
 
   const from = startOfMonth(now);
-  // Spend per pfc_primary for the current month (purchases only).
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  const win = { from, to };
+  // Spend per pfc_primary for the current month (purchases only). Amortized
+  // charges contribute only this month's slice — see spend-sql.
   const rows = await db
     .select({
       category: effectiveCategory,
-      total: sql<number>`sum(${transactions.amountCents})::int`,
+      total: sql<number>`sum(${windowAmountCents(win)})::int`,
     })
     .from(transactions)
     .where(
       and(
         gt(transactions.amountCents, 0),
         eq(transactions.pending, false),
-        gte(transactions.postedAt, from),
+        inWindow(win),
         // Purchases plus user-categorized peer-to-peer payments (see spend-sql).
         spendRowPredicate(),
       ),

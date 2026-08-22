@@ -5,6 +5,7 @@ import {
   integer,
   boolean,
   numeric,
+  date,
   jsonb,
   timestamp,
   index,
@@ -81,6 +82,12 @@ export const transactions = pgTable(
     // reviewed. `userMemo` is the free-text note ("rent", "car payment").
     userCategory: text("user_category"),
     userMemo: text("user_memo"),
+    // Spread this charge evenly across N budget months starting with the month
+    // it posted (null = counts entirely in its own month). For premiums paid in
+    // one lump — 6-month auto/renters insurance — so a month isn't blown out by
+    // a bill that really covers half a year. Slices are exact: each month gets
+    // floor(amt*(k+1)/N) - floor(amt*k/N), so they always re-sum to the charge.
+    amortizeMonths: integer("amortize_months"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -111,6 +118,55 @@ export const holdings = pgTable(
   },
   (t) => [index("holdings_account_idx").on(t.accountId)],
 );
+
+/**
+ * Investment transactions (buys/sells/dividends/fees) for brokerage accounts.
+ * Unlike holdings, Plaid gives these a stable investment_transaction_id, so we
+ * upsert on it. Amount sign matches our convention: positive = cash leaving the
+ * account (a buy), negative = cash in (a sell/dividend). Kept separate from the
+ * `transactions` table so they never leak into spending/budget analytics.
+ */
+export const investmentTransactions = pgTable(
+  "investment_transactions",
+  {
+    id: text("id").primaryKey(), // Plaid investment_transaction_id
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    securityId: text("security_id"), // null for cash-only moves (deposits, fees)
+    ticker: text("ticker"),
+    securityName: text("security_name"),
+    name: text("name").notNull(),
+    type: text("type").notNull(), // buy | sell | cash | fee | transfer | cancel
+    subtype: text("subtype"),
+    quantity: numeric("quantity").notNull(),
+    priceCents: integer("price_cents"), // per-unit price
+    amountCents: integer("amount_cents").notNull(), // positive = cash out (buy)
+    feesCents: integer("fees_cents"),
+    isoCurrency: text("iso_currency").default("USD"),
+    postedAt: timestamp("posted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("investment_txns_account_idx").on(t.accountId),
+    index("investment_txns_posted_idx").on(t.postedAt),
+  ],
+);
+
+/**
+ * Daily net-worth history. Plaid only ever exposes *current* balances, so the
+ * only way to chart net worth over time is to record it ourselves: every sync
+ * upserts one row for today (keyed on `day`), so re-syncing the same day
+ * overwrites rather than duplicating, and the series is one point per day.
+ */
+export const netWorthSnapshots = pgTable("net_worth_snapshots", {
+  day: date("day").primaryKey(), // UTC calendar day, "YYYY-MM-DD"
+  assetsCents: integer("assets_cents").notNull(),
+  liabilitiesCents: integer("liabilities_cents").notNull(), // positive = owed
+  netWorthCents: integer("net_worth_cents").notNull(), // assets − liabilities
+  capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** Card config for the rewards engine (seeded; see §7). */
 export const cards = pgTable("cards", {
@@ -194,6 +250,10 @@ export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;
 export type Holding = typeof holdings.$inferSelect;
 export type NewHolding = typeof holdings.$inferInsert;
+export type InvestmentTransaction = typeof investmentTransactions.$inferSelect;
+export type NewInvestmentTransaction = typeof investmentTransactions.$inferInsert;
+export type NetWorthSnapshot = typeof netWorthSnapshots.$inferSelect;
+export type NewNetWorthSnapshot = typeof netWorthSnapshots.$inferInsert;
 export type Card = typeof cards.$inferSelect;
 export type NewCard = typeof cards.$inferInsert;
 export type Budget = typeof budgets.$inferSelect;

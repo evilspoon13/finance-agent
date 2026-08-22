@@ -6,6 +6,7 @@ import "dotenv/config";
 import { syncAllItems } from "@/lib/plaid/sync";
 import { seedCards } from "@/lib/db/rewards-queries";
 import { recomputeAndPersist } from "@/lib/rewards/compute";
+import { recordNetWorthSnapshot } from "@/lib/db/net-worth-history";
 
 async function main() {
   const results = await syncAllItems();
@@ -13,12 +14,14 @@ async function main() {
     const status = r.error ? `ERROR: ${r.error}` : "ok";
     console.log(
       `${r.institution} (${r.itemId}): +${r.added} ~${r.modified} -${r.removed} ` +
-        `accounts=${r.accounts} holdings=${r.holdings} [${status}]`,
+        `accounts=${r.accounts} holdings=${r.holdings} invTxns=${r.investmentTxns} [${status}]`,
     );
   }
   await seedCards();
   const { updated } = await recomputeAndPersist();
   console.log(`Rewards: computed optimal card + delta for ${updated} purchases.`);
+  const snapshot = await recordNetWorthSnapshot();
+  console.log(`Net worth snapshot ${snapshot.day}: ${(snapshot.netWorthCents / 100).toFixed(2)}`);
   process.exit(results.some((r) => r.error) ? 1 : 0);
 }
 

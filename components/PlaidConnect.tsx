@@ -19,6 +19,8 @@ export interface ItemDTO {
   id: string;
   institutionName: string;
   status: "good" | "login_required" | "error";
+  /** Hand-entered institution Plaid can't reach; balances are maintained by SQL. */
+  manual?: boolean;
   accounts: AccountDTO[];
 }
 
@@ -29,6 +31,7 @@ interface LinkState {
 }
 
 const STATUS_STYLE: Record<string, string> = {
+  manual: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
   good: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300",
   login_required: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
   error: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
@@ -176,20 +179,24 @@ export function PlaidConnect({ items }: { items: ItemDTO[] }) {
                 <div className="flex items-center gap-2">
                   <span
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      STATUS_STYLE[item.status] ?? STATUS_STYLE.error
+                      STATUS_STYLE[item.manual ? "manual" : item.status] ?? STATUS_STYLE.error
                     }`}
+                    title={item.manual ? "Entered by hand; not synced from Plaid" : undefined}
                   >
-                    {item.status}
+                    {item.manual ? "manual" : item.status}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => startUpdate(item.id)}
-                    disabled={busy}
-                    className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                    title="Repair connection / backfill history (Link update mode)"
-                  >
-                    Reconnect
-                  </button>
+                  {/* Manual items have no Plaid token, so Link update mode can't repair them. */}
+                  {item.manual ? null : (
+                    <button
+                      type="button"
+                      onClick={() => startUpdate(item.id)}
+                      disabled={busy}
+                      className="rounded-md border border-zinc-300 px-2.5 py-1 text-xs hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                      title="Repair connection / backfill history (Link update mode)"
+                    >
+                      Reconnect
+                    </button>
+                  )}
                 </div>
               </div>
               <table className="mt-3 w-full text-sm">

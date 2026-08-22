@@ -88,7 +88,7 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
       </div>
 
       <div className="mt-6 space-y-3">
-        <Section title="Which card to use" headline={`${report.guide.length} categories`} defaultOpen>
+        <Section title="Which card to use" headline={`${report.guide.length} categories`}>
           <GuideBody report={report} />
         </Section>
 

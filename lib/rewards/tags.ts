@@ -51,7 +51,12 @@ const MERCHANT_TAGS: { match: string[]; tags: RewardTag[] }[] = [
     ],
     tags: ["streaming"],
   },
-  { match: ["united airlines", "united.com", "ual "], tags: ["united", "flights"] },
+  // Co-branded United earning covers tickets, inflight purchases and United
+  // Club — but NOT lookalikes ("United Healthcare"), so never match bare "united".
+  {
+    match: ["united airlines", "unitedairlines", "united air", "united.com", "ual ", "mileageplus", "united club"],
+    tags: ["united", "flights"],
+  },
   {
     match: ["tesla supercharger", "chargepoint", "evgo", "electrify america"],
     tags: ["ev_charging"],

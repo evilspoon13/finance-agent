@@ -15,6 +15,10 @@ const BUDGET: Record<string, number> = {
   GENERAL_MERCHANDISE: 250,
   ENTERTAINMENT: 200,
   PERSONAL_CARE: 120,
+  // Auto ($414.88 semi-annual = $69.15/mo) + renters ($287.64 annual =
+  // $23.97/mo), spread monthly by `amortize_months` → $93.12/mo of known fixed
+  // cost. Drops to ~$83/mo if the duplicate Assurant charge gets refunded.
+  INSURANCE: 95,
   GENERAL_SERVICES: 80,
   MEDICAL: 60,
   HOME_IMPROVEMENT: 50,

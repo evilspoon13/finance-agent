@@ -2,6 +2,7 @@ import { PageShell } from "@/components/PageShell";
 import { PlaidConnect, type ItemDTO } from "@/components/PlaidConnect";
 import { SyncButton } from "@/components/SyncButton";
 import { listItemsWithAccounts } from "@/lib/db/queries";
+import { isManualItem } from "@/lib/plaid/sync";
 
 // Reads the DB on every request.
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export default async function ConnectionsPage() {
     id: item.id,
     institutionName: item.institutionName,
     status: item.status,
+    manual: isManualItem(item),
     accounts: item.accounts.map((a) => ({
       id: a.id,
       name: a.name,

@@ -2,13 +2,13 @@ import { PageShell } from "@/components/PageShell";
 import { Section } from "@/components/Section";
 import {
   getNetWorth,
-  getPortfolio,
   getIncomeSummary,
   type AccountClass,
   type NetWorth,
-  type Portfolio,
   type IncomeSummary,
 } from "@/lib/db/analytics";
+import { recordNetWorthSnapshot, getNetWorthHistory } from "@/lib/db/net-worth-history";
+import { NetWorthChart } from "@/components/NetWorthChart";
 import { formatCents } from "@/lib/money";
 import { humanizeCategory } from "@/lib/category";
 
@@ -21,12 +21,11 @@ const CLASS_LABEL: Record<AccountClass, string> = {
   other: "Other",
 };
 
-const fmtPct = (n: number | null) => (n === null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`);
-const gainColor = (n: number | null) =>
-  n === null ? "" : n >= 0 ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400";
-
 export default async function NetWorthPage() {
-  const [nw, portfolio, income] = await Promise.all([getNetWorth(), getPortfolio(), getIncomeSummary()]);
+  // Viewing the page also records today's snapshot (idempotent per day), so the
+  // history keeps growing even between sync runs.
+  await recordNetWorthSnapshot();
+  const [nw, income, history] = await Promise.all([getNetWorth(), getIncomeSummary(), getNetWorthHistory()]);
   const thisYear = new Date().getUTCFullYear();
   const hasIncome = income.paychecks.length > 0 || income.ytdCents > 0;
 
@@ -44,23 +43,16 @@ export default async function NetWorthPage() {
         </p>
       ) : (
         <div className="mt-8 space-y-3">
-          <Section title="Accounts" headline={`${nw.lines.length} accounts`} defaultOpen>
-            <AccountsBody nw={nw} />
+          <Section
+            title="Net worth over time"
+            headline={history.length > 1 ? `${history.length} days` : "tracking started"}
+          >
+            <NetWorthChart points={history} />
           </Section>
 
-          {portfolio.holdings.length > 0 ? (
-            <Section
-              title="Portfolio"
-              headline={
-                <>
-                  {formatCents(portfolio.totalValueCents)}
-                  <span className={`ml-2 ${gainColor(portfolio.totalGainCents)}`}>{fmtPct(portfolio.totalGainPct)}</span>
-                </>
-              }
-            >
-              <PortfolioBody p={portfolio} />
-            </Section>
-          ) : null}
+          <Section title="Accounts" headline={`${nw.lines.length} accounts`}>
+            <AccountsBody nw={nw} />
+          </Section>
 
           {hasIncome ? (
             <Section title="Paychecks & income" headline={`${formatCents(income.ytdCents)} YTD`}>
@@ -104,79 +96,6 @@ function AccountsBody({ nw }: { nw: NetWorth }) {
         );
       })}
     </div>
-  );
-}
-
-function PortfolioBody({ p }: { p: Portfolio }) {
-  const fmtQty = (q: string) => {
-    const n = Number(q);
-    return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 4 }) : q;
-  };
-
-  return (
-    <>
-      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="Portfolio Value" cents={p.totalValueCents} />
-        <Stat label="Cost Basis" cents={p.totalCostCents} />
-        <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-          <div className="text-xs uppercase tracking-wide text-zinc-500">Unrealized Gain</div>
-          <div className={`mt-1 text-2xl tabular-nums ${gainColor(p.totalGainCents)}`}>
-            {p.totalGainCents >= 0 ? "+" : ""}
-            {formatCents(p.totalGainCents)}
-            <span className="ml-2 text-base">{fmtPct(p.totalGainPct)}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
-              <th className="px-4 py-2 text-left font-semibold">Holding</th>
-              <th className="px-4 py-2 text-right font-semibold">Shares</th>
-              <th className="px-4 py-2 text-right font-semibold">Value</th>
-              <th className="px-4 py-2 text-right font-semibold">Cost</th>
-              <th className="px-4 py-2 text-right font-semibold">Gain / Loss</th>
-              <th className="px-4 py-2 text-right font-semibold">Allocation</th>
-            </tr>
-          </thead>
-          <tbody>
-            {p.holdings.map((h) => (
-              <tr key={`${h.ticker ?? h.name}`} className="border-t border-zinc-100 dark:border-zinc-800">
-                <td className="px-4 py-2">
-                  <div className="font-medium">{h.ticker ?? "—"}</div>
-                  <div className="truncate text-xs text-zinc-500">{h.name}</div>
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums">{fmtQty(h.quantity)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatCents(h.valueCents)}</td>
-                <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
-                  {h.costBasisCents != null ? formatCents(h.costBasisCents) : "—"}
-                </td>
-                <td className={`px-4 py-2 text-right tabular-nums ${gainColor(h.gainCents)}`}>
-                  {h.gainCents != null ? (
-                    <>
-                      {h.gainCents >= 0 ? "+" : ""}
-                      {formatCents(h.gainCents)}
-                      <span className="ml-1 text-xs">{fmtPct(h.gainPct)}</span>
-                    </>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td className="px-4 py-2">
-                  <div className="flex items-center justify-end gap-2">
-                    <span className="tabular-nums text-zinc-500">{h.pctOfPortfolio.toFixed(1)}%</span>
-                    <div className="h-1.5 w-16 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                      <div className="h-1.5 rounded-full bg-zinc-900 dark:bg-zinc-100" style={{ width: `${h.pctOfPortfolio}%` }} />
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </>
   );
 }
 

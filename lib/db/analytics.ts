@@ -1,11 +1,24 @@
 import { and, gte, lte, eq, inArray, ilike, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "./client";
-import { accounts, transactions, holdings, cards, type Account } from "./schema";
+import {
+  accounts,
+  transactions,
+  holdings,
+  investmentTransactions,
+  items,
+  cards,
+  type Account,
+} from "./schema";
 import {
   P2P_OUT_DETAILED,
   P2P_IN_DETAILED,
   effectiveCategory,
   spendRowPredicate,
+  windowAmountCents,
+  inWindow,
+  isOwnBankTransfer,
+  isIgnored,
+  postedInWindow,
 } from "./spend-sql";
 
 /** pfc_detailed filter accepting one subcategory or a set (e.g. all dining types). */
@@ -111,6 +124,7 @@ export async function getNetWorth(): Promise<NetWorth> {
   };
 }
 
+/** A single investment position with per-holding gain/loss and allocation. */
 export interface PortfolioHolding {
   ticker: string | null;
   name: string;
@@ -120,70 +134,206 @@ export interface PortfolioHolding {
   costBasisCents: number | null;
   gainCents: number | null; // value − cost (null when no cost basis, e.g. cash)
   gainPct: number | null;
-  pctOfPortfolio: number; // share of total market value
+  pctOfPortfolio: number; // share of market value (within its account, see getInvestments)
 }
-export interface Portfolio {
+
+// ---------------------------------------------------------------------------
+// Investments (detailed, per-account: taxable brokerage / 401k / Roth)
+// ---------------------------------------------------------------------------
+
+export type InvestmentKind = "taxable" | "401k" | "roth" | "ira" | "hsa" | "other";
+
+export interface InvestmentActivity {
+  id: string;
+  postedAt: Date | null;
+  type: string; // buy | sell | cash | fee | transfer | cancel
+  subtype: string | null;
+  ticker: string | null;
+  securityName: string | null;
+  name: string;
+  quantity: string;
+  amountCents: number; // positive = cash out (buy), negative = cash in
+  priceCents: number | null;
+  feesCents: number | null;
+}
+
+export interface InvestmentAccount {
+  accountId: string;
+  name: string;
+  institution: string | null;
+  subtype: string | null;
+  kind: InvestmentKind;
+  valueCents: number;
+  costCents: number; // summed over holdings with a cost basis
+  gainCents: number;
+  gainPct: number | null;
+  holdings: PortfolioHolding[]; // pctOfPortfolio = share within THIS account
+  activity: InvestmentActivity[];
+}
+
+export interface Investments {
   totalValueCents: number;
-  totalCostCents: number; // summed only over holdings that have a cost basis
-  totalGainCents: number; // value − cost over those same holdings
+  totalCostCents: number;
+  totalGainCents: number;
   totalGainPct: number | null;
-  holdings: PortfolioHolding[];
+  accounts: InvestmentAccount[];
+}
+
+/** Map a Plaid investment-account subtype to a coarse kind for grouping/labels. */
+export function investmentKind(subtype: string | null): InvestmentKind {
+  switch ((subtype ?? "").toLowerCase()) {
+    case "brokerage":
+    case "non-taxable brokerage account":
+    case "cash management":
+      return "taxable";
+    case "401k":
+    case "401a":
+    case "403b":
+    case "457b":
+      return "401k";
+    case "roth":
+    case "roth 401k":
+      return "roth";
+    case "ira":
+    case "sep ira":
+    case "simple ira":
+    case "rollover":
+      return "ira";
+    case "hsa":
+      return "hsa";
+    default:
+      return "other";
+  }
 }
 
 /**
- * Investment holdings with per-position gain/loss and allocation. Holdings are a
- * current snapshot (Plaid /investments/holdings) — there is no trade history, but
- * cost basis lets us show unrealized return. Cash-like positions (no cost basis)
- * count toward value/allocation but not gain.
+ * Detailed per-account investment view: each brokerage/retirement account with
+ * its holdings (gain/loss + allocation within the account) and recent activity
+ * (buys/sells/dividends/fees from investment_transactions), plus overall totals.
+ * Value prefers summed holdings market value, falling back to account balance.
  */
-export async function getPortfolio(): Promise<Portfolio> {
-  const rows = await db
+export async function getInvestments(): Promise<Investments> {
+  const acctRows = await db
     .select({
+      id: accounts.id,
+      name: accounts.name,
+      subtype: accounts.subtype,
+      balanceCents: accounts.currentBalanceCents,
+      institution: items.institutionName,
+    })
+    .from(accounts)
+    .innerJoin(items, eq(items.id, accounts.itemId))
+    .where(eq(accounts.type, "investment"));
+
+  if (acctRows.length === 0) {
+    return { totalValueCents: 0, totalCostCents: 0, totalGainCents: 0, totalGainPct: null, accounts: [] };
+  }
+
+  const acctIds = acctRows.map((a) => a.id);
+
+  const hRows = await db
+    .select({
+      accountId: holdings.accountId,
       ticker: holdings.ticker,
       name: holdings.name,
-      account: accounts.name,
       quantity: holdings.quantity,
       valueCents: holdings.valueCents,
       costBasisCents: holdings.costBasisCents,
     })
     .from(holdings)
-    .innerJoin(accounts, eq(accounts.id, holdings.accountId))
-    .orderBy(sql`${holdings.valueCents} desc`);
+    .where(inArray(holdings.accountId, acctIds))
+    .orderBy(desc(holdings.valueCents));
 
-  const totalValue = rows.reduce((s, r) => s + r.valueCents, 0);
-  let costWithBasis = 0;
-  let valueWithBasis = 0;
-  for (const r of rows) {
-    if (r.costBasisCents != null) {
-      costWithBasis += r.costBasisCents;
-      valueWithBasis += r.valueCents;
-    }
+  const aRows = await db
+    .select()
+    .from(investmentTransactions)
+    .where(inArray(investmentTransactions.accountId, acctIds))
+    .orderBy(desc(investmentTransactions.postedAt));
+
+  const holdingsByAccount = new Map<string, typeof hRows>();
+  for (const h of hRows) {
+    const list = holdingsByAccount.get(h.accountId) ?? [];
+    list.push(h);
+    holdingsByAccount.set(h.accountId, list);
   }
-  const totalGain = valueWithBasis - costWithBasis;
+  const activityByAccount = new Map<string, InvestmentActivity[]>();
+  for (const t of aRows) {
+    const list = activityByAccount.get(t.accountId) ?? [];
+    list.push({
+      id: t.id,
+      postedAt: t.postedAt,
+      type: t.type,
+      subtype: t.subtype,
+      ticker: t.ticker,
+      securityName: t.securityName,
+      name: t.name,
+      quantity: t.quantity,
+      amountCents: t.amountCents,
+      priceCents: t.priceCents,
+      feesCents: t.feesCents,
+    });
+    activityByAccount.set(t.accountId, list);
+  }
 
-  const out: PortfolioHolding[] = rows.map((r) => {
-    const gainCents = r.costBasisCents != null ? r.valueCents - r.costBasisCents : null;
-    const gainPct =
-      r.costBasisCents && r.costBasisCents > 0 ? ((r.valueCents - r.costBasisCents) / r.costBasisCents) * 100 : null;
+  const outAccounts: InvestmentAccount[] = acctRows.map((a) => {
+    const hs = holdingsByAccount.get(a.id) ?? [];
+    const holdingsValue = hs.reduce((s, h) => s + h.valueCents, 0);
+    // Prefer holdings market value; fall back to the account balance if none synced.
+    const valueCents = hs.length > 0 ? holdingsValue : a.balanceCents ?? 0;
+
+    let costWithBasis = 0;
+    let valueWithBasis = 0;
+    for (const h of hs) {
+      if (h.costBasisCents != null) {
+        costWithBasis += h.costBasisCents;
+        valueWithBasis += h.valueCents;
+      }
+    }
+    const gainCents = valueWithBasis - costWithBasis;
+
+    const holdingList: PortfolioHolding[] = hs.map((h) => {
+      const g = h.costBasisCents != null ? h.valueCents - h.costBasisCents : null;
+      const gPct = h.costBasisCents && h.costBasisCents > 0 ? ((h.valueCents - h.costBasisCents) / h.costBasisCents) * 100 : null;
+      return {
+        ticker: h.ticker,
+        name: h.name,
+        account: a.name,
+        quantity: h.quantity,
+        valueCents: h.valueCents,
+        costBasisCents: h.costBasisCents,
+        gainCents: g,
+        gainPct: gPct,
+        pctOfPortfolio: holdingsValue > 0 ? (h.valueCents / holdingsValue) * 100 : 0,
+      };
+    });
+
     return {
-      ticker: r.ticker,
-      name: r.name,
-      account: r.account,
-      quantity: r.quantity,
-      valueCents: r.valueCents,
-      costBasisCents: r.costBasisCents,
+      accountId: a.id,
+      name: a.name,
+      institution: a.institution,
+      subtype: a.subtype,
+      kind: investmentKind(a.subtype),
+      valueCents,
+      costCents: costWithBasis,
       gainCents,
-      gainPct,
-      pctOfPortfolio: totalValue > 0 ? (r.valueCents / totalValue) * 100 : 0,
+      gainPct: costWithBasis > 0 ? (gainCents / costWithBasis) * 100 : null,
+      holdings: holdingList,
+      activity: activityByAccount.get(a.id) ?? [],
     };
   });
 
+  outAccounts.sort((x, y) => y.valueCents - x.valueCents);
+
+  const totalValue = outAccounts.reduce((s, a) => s + a.valueCents, 0);
+  const totalCost = outAccounts.reduce((s, a) => s + a.costCents, 0);
+  const totalGain = outAccounts.reduce((s, a) => s + a.gainCents, 0);
+
   return {
     totalValueCents: totalValue,
-    totalCostCents: costWithBasis,
+    totalCostCents: totalCost,
     totalGainCents: totalGain,
-    totalGainPct: costWithBasis > 0 ? (totalGain / costWithBasis) * 100 : null,
-    holdings: out,
+    totalGainPct: totalCost > 0 ? (totalGain / totalCost) * 100 : null,
+    accounts: outAccounts,
   };
 }
 
@@ -269,9 +419,10 @@ function spendingWhere(f: SpendingFilter): SQL | undefined {
     sql`${transactions.amountCents} > 0`,
     sql`${transactions.pending} = false`,
     spendRowPredicate(),
+    // Date filter lives in inWindow() so amortized charges can reach into the
+    // window from an earlier month (see spend-sql).
+    inWindow(f),
   ];
-  if (f.from) clauses.push(gte(transactions.postedAt, f.from));
-  if (f.to) clauses.push(lte(transactions.postedAt, f.to));
   if (f.accountId) clauses.push(eq(transactions.accountId, f.accountId));
   return and(...clauses);
 }
@@ -298,7 +449,7 @@ export async function spendingTotal(
 
   const [row] = await db
     .select({
-      totalCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::int`,
+      totalCents: sql<number>`coalesce(sum(${windowAmountCents(f)}), 0)::int`,
       count: sql<number>`count(*)::int`,
     })
     .from(transactions)
@@ -316,13 +467,13 @@ export async function spendingByCategory(f: SpendingFilter = {}): Promise<Catego
   const rows = await db
     .select({
       category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
-      totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
       count: sql<number>`count(*)::int`,
     })
     .from(transactions)
     .where(spendingWhere(f))
     .groupBy(sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`)
-    .orderBy(sql`sum(${transactions.amountCents}) desc`);
+    .orderBy(sql`sum(${windowAmountCents(f)}) desc`);
   return rows.map((r) => ({ category: r.category, totalCents: r.totalCents ?? 0, count: r.count }));
 }
 
@@ -335,7 +486,7 @@ export async function spendingByMonth(f: SpendingFilter = {}): Promise<MonthSpen
   const rows = await db
     .select({
       month: sql<string>`to_char(date_trunc('month', ${transactions.postedAt}), 'YYYY-MM')`,
-      totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
     })
     .from(transactions)
     .where(spendingWhere(f))
@@ -357,14 +508,14 @@ export async function spendingByAccount(f: SpendingFilter = {}): Promise<Account
     .select({
       accountId: transactions.accountId,
       name: displayName,
-      totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
     })
     .from(transactions)
     .innerJoin(accounts, eq(accounts.id, transactions.accountId))
     .leftJoin(cards, eq(cards.accountId, transactions.accountId))
     .where(spendingWhere(f))
     .groupBy(transactions.accountId, accounts.name, cards.label)
-    .orderBy(sql`sum(${transactions.amountCents}) desc`);
+    .orderBy(sql`sum(${windowAmountCents(f)}) desc`);
   return rows.map((r) => ({ accountId: r.accountId, name: r.name, totalCents: r.totalCents ?? 0 }));
 }
 
@@ -474,7 +625,7 @@ export async function spendingDrilldown(
     db
       .select({
         category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
-        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
         count: sql<number>`count(*)::int`,
       })
       .from(transactions)
@@ -484,7 +635,7 @@ export async function spendingDrilldown(
       .select({
         category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         detailed: sql<string>`coalesce(${transactions.pfcDetailed}, 'OTHER')`,
-        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
         count: sql<number>`count(*)::int`,
       })
       .from(transactions)
@@ -497,7 +648,7 @@ export async function spendingDrilldown(
       .select({
         category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
         merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
-        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
         count: sql<number>`count(*)::int`,
       })
       .from(transactions)
@@ -512,13 +663,14 @@ export async function spendingDrilldown(
   const prev = previousWindow(f);
   const prevByCategory = new Map<string, number>();
   if (prev) {
+    const prevFilter = { from: prev.from, to: prev.to, accountId: f.accountId };
     const prevRows = await db
       .select({
         category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
-        totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+        totalCents: sql<number>`sum(${windowAmountCents(prevFilter)})::int`,
       })
       .from(transactions)
-      .where(spendingWhere({ from: prev.from, to: prev.to, accountId: f.accountId }))
+      .where(spendingWhere(prevFilter))
       .groupBy(sql`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`);
     for (const r of prevRows) prevByCategory.set(r.category, r.totalCents ?? 0);
   }
@@ -571,7 +723,7 @@ export async function spendingFingerprint(f: SpendingFilter = {}): Promise<strin
   const [row] = await db
     .select({
       count: sql<number>`count(*)::int`,
-      sum: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::bigint`,
+      sum: sql<number>`coalesce(sum(${windowAmountCents(f)}), 0)::bigint`,
       latest: sql<string>`coalesce(max(${transactions.updatedAt})::text, '')`,
     })
     .from(transactions)
@@ -594,13 +746,13 @@ export async function topMerchants(
   // "visits" ranks by how often the user goes there; "spend" (default) by total dollars.
   const order =
     f.sort === "visits"
-      ? sql`count(*) desc, sum(${transactions.amountCents}) desc`
-      : sql`sum(${transactions.amountCents}) desc`;
+      ? sql`count(*) desc, sum(${windowAmountCents(f)}) desc`
+      : sql`sum(${windowAmountCents(f)}) desc`;
 
   const rows = await db
     .select({
       merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
-      totalCents: sql<number>`sum(${transactions.amountCents})::int`,
+      totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
       count: sql<number>`count(*)::int`,
     })
     .from(transactions)
@@ -707,6 +859,13 @@ export interface ExcludedSummary {
   internalTransfersCents: number; // non-P2P transfers out (savings, investing, account moves)
   ccPaymentsCents: number; // credit-card payments (purchases already counted on the card)
   inflowsCents: number; // money in (income, refunds, deposits), excluding P2P reimbursements
+  ignoredCents: number; // rows the user marked "not spending" (IGNORE)
+  /**
+   * Cash paid this window for amortized charges MINUS the slices charged to it —
+   * i.e. premium money that left the account now but is budgeted to later months
+   * (negative when this window is absorbing an earlier month's premium).
+   */
+  deferredCents: number;
 }
 
 /**
@@ -720,14 +879,97 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
       internal: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcPrimary}, '') in ('TRANSFER_OUT', 'TRANSFER_IN') and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_OUT_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
       cc: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcDetailed}, '') = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' then ${transactions.amountCents} else 0 end), 0)::int`,
       inflow: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_IN_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
+      // Own-bank moves land here too: Plaid files them as LOAN_PAYMENTS, but the
+      // user confirmed they're transfers between their own banks.
+      own: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and ${isOwnBankTransfer} then ${transactions.amountCents} else 0 end), 0)::int`,
+      ignored: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and ${isIgnored} and not ${isOwnBankTransfer} then ${transactions.amountCents} else 0 end), 0)::int`,
     })
     .from(transactions)
     .where(where);
+
+  // Premium money that left the account in this window but is budgeted to other
+  // months (see windowAmountCents), so the footer still adds up to 100%.
+  // `paid` is cash that left in this window; `charged` is what this window is
+  // budgeted for, which can come from a premium posted in an earlier month — so
+  // the row set here is every amortized charge, not just this window's.
+  const inWindowSql = postedInWindow(f);
+
+  const [amort] = await db
+    .select({
+      paid: sql<number>`coalesce(sum(case when ${inWindowSql} then ${transactions.amountCents} else 0 end), 0)::int`,
+      charged: sql<number>`coalesce(sum(${windowAmountCents(f)}), 0)::int`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        sql`${transactions.amortizeMonths} is not null and ${transactions.amortizeMonths} > 1`,
+        sql`${transactions.amountCents} > 0`,
+        sql`${transactions.pending} = false`,
+        spendRowPredicate(),
+        ...(f.accountId ? [eq(transactions.accountId, f.accountId)] : []),
+      ),
+    );
+
   return {
-    internalTransfersCents: row?.internal ?? 0,
+    internalTransfersCents: (row?.internal ?? 0) + (row?.own ?? 0),
     ccPaymentsCents: row?.cc ?? 0,
     inflowsCents: row?.inflow ?? 0,
+    ignoredCents: row?.ignored ?? 0,
+    deferredCents: (amort?.paid ?? 0) - (amort?.charged ?? 0),
   };
+}
+
+/** One amortized charge as it applies to a window (for the "spread" label). */
+export interface AmortizedCharge {
+  category: string;
+  merchant: string;
+  postedAt: Date | null;
+  totalCents: number; // the full charge
+  months: number; // how many months it's spread across
+  monthIndex: number; // 1-based month of the spread this window is showing
+  windowCents: number; // the slice charged to this window
+}
+
+/**
+ * Amortized charges touching a window, so the budgets page can say *why* a
+ * category shows less than the bill ("month 2 of 6 of a $414.88 premium").
+ */
+export async function amortizedCharges(f: SpendingFilter = {}): Promise<AmortizedCharge[]> {
+  const monthOffset = f.from
+    ? sql<number>`(${f.from.getUTCFullYear() * 12 + f.from.getUTCMonth()} - (extract(year from ${transactions.postedAt})::int * 12 + extract(month from ${transactions.postedAt})::int - 1))`
+    : sql<number>`0`;
+
+  const rows = await db
+    .select({
+      category: sql<string>`coalesce(${effectiveCategory}, 'UNCATEGORIZED')`,
+      merchant: sql<string>`coalesce(${transactions.merchantName}, ${transactions.name})`,
+      postedAt: transactions.postedAt,
+      totalCents: transactions.amountCents,
+      months: transactions.amortizeMonths,
+      monthIndex: sql<number>`(${monthOffset} + 1)::int`,
+      windowCents: sql<number>`${windowAmountCents(f)}::int`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        sql`${transactions.amortizeMonths} is not null and ${transactions.amortizeMonths} > 1`,
+        sql`${transactions.amountCents} > 0`,
+        sql`${transactions.pending} = false`,
+        spendRowPredicate(),
+        inWindow(f),
+        ...(f.accountId ? [eq(transactions.accountId, f.accountId)] : []),
+      ),
+    );
+
+  return rows.map((r) => ({
+    category: r.category,
+    merchant: r.merchant,
+    postedAt: r.postedAt,
+    totalCents: r.totalCents,
+    months: r.months ?? 1,
+    monthIndex: r.monthIndex,
+    windowCents: r.windowCents,
+  }));
 }
 
 export interface UncategorizedP2P {
