@@ -1,0 +1,1 @@
+ALTER TABLE "transactions" ADD COLUMN "budget_month" date;

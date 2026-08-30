@@ -2,9 +2,9 @@ import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
 import { Section } from "@/components/Section";
 import { analyzeRewards, type RewardWindow, type RewardsReport } from "@/lib/rewards/compute";
-import { quarterKey, discoverCategoriesFor, MILES_VALUE_CENTS } from "@/lib/rewards/config";
+import { quarterKey, MILES_VALUE_CENTS } from "@/lib/rewards/config";
 import { formatCents } from "@/lib/money";
-import { humanizeCategory } from "@/lib/category";
+import { rewardCategoryLabel } from "@/lib/rewards/reward-categories";
 import type { RawSearchParams } from "@/lib/filters";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +23,23 @@ function windowFor(key: WindowKey): RewardWindow | undefined {
   return undefined;
 }
 
+/**
+ * Page subtitle, built from the cards the user actually holds: rotating
+ * categories are only worth naming to someone with a rotating card, and the
+ * miles valuation only to someone earning miles.
+ */
+function subtitleFor(report: RewardsReport, now: Date): string {
+  const parts = ["Best-card guidance and rewards left on the table."];
+  for (const r of report.rotating) {
+    const cats = r.categories.length
+      ? r.categories.map((c) => rewardCategoryLabel(c)).join(", ")
+      : "not announced yet";
+    parts.push(`${r.label} ${quarterKey(now)} ${r.bonusBps / 100}%: ${cats}.`);
+  }
+  if (report.earnsMiles) parts.push(`Miles valued at ${MILES_VALUE_CENTS}¢.`);
+  return parts.join(" ");
+}
+
 export default async function RewardsPage(props: { searchParams: Promise<RawSearchParams> }) {
   const sp = await props.searchParams;
   const rawWindow = Array.isArray(sp.window) ? sp.window[0] : sp.window;
@@ -30,7 +47,6 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
 
   const report = await analyzeRewards(windowFor(windowKey));
   const now = new Date();
-  const activeCats = discoverCategoriesFor(now);
 
   if (!report.hasCards) {
     return (
@@ -47,12 +63,7 @@ export default async function RewardsPage(props: { searchParams: Promise<RawSear
   }
 
   return (
-    <PageShell
-      title="Rewards"
-      subtitle={`Best-card guidance and rewards left on the table. Discover ${quarterKey(now)} 5%: ${
-        activeCats.length ? activeCats.map((c) => humanizeCategory(c)).join(", ") : "not announced"
-      }. Miles valued at ${MILES_VALUE_CENTS}¢.`}
-    >
+    <PageShell title="Rewards" subtitle={subtitleFor(report, now)}>
       <div className="mb-4 flex flex-wrap gap-2 text-xs">
         {(["month", "quarter", "all"] as const).map((k) => {
           const label = k === "month" ? "This month" : k === "quarter" ? "This quarter" : "All time";
@@ -124,7 +135,9 @@ function GuideBody({ report }: { report: RewardsReport }) {
       <tbody>
         {report.guide.map((g) => (
           <tr key={g.category} className="border-t border-zinc-100 dark:border-zinc-800">
-            <td className="py-2">{g.category === "everything else" ? "Everything else" : humanizeCategory(g.category)}</td>
+            <td className="py-2">
+              {g.category === "everything else" ? "Everything else" : rewardCategoryLabel(g.category)}
+            </td>
             <td className="py-2">{g.bestLabel}</td>
             <td className="py-2 text-right tabular-nums text-zinc-500">{(g.effectiveBps / 100).toFixed(2)}%</td>
           </tr>

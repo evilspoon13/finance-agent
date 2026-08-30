@@ -1,4 +1,4 @@
-import { sql, gte, lte, type SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { transactions } from "./schema";
 
 /**
@@ -98,8 +98,17 @@ function monthIndex(d: Date): number {
   return d.getUTCFullYear() * 12 + d.getUTCMonth();
 }
 
-/** Calendar-month index of posted_at, for slicing amortized charges. */
-const postedMonthIndex: SQL<number> = sql`(extract(year from ${transactions.postedAt})::int * 12 + extract(month from ${transactions.postedAt})::int - 1)`;
+/**
+ * The date a row budgets under: the user's `budget_month` override when set,
+ * otherwise when it posted. Every spending window is measured against this, so
+ * a charge paid ahead of the period it covers lands in the right month. Note
+ * that posted_at is rewritten from Plaid on every sync, so moving a charge
+ * between months has to be an override — editing posted_at does not survive.
+ */
+export const budgetAt: SQL = sql`coalesce(${transactions.budgetMonth}::timestamptz, ${transactions.postedAt})`;
+
+/** Calendar-month index of the budget date, for slicing amortized charges. */
+const postedMonthIndex: SQL<number> = sql`(extract(year from ${budgetAt})::int * 12 + extract(month from ${budgetAt})::int - 1)`;
 
 export interface Window {
   from?: Date;
@@ -140,14 +149,26 @@ export function windowAmountCents(w: Window = {}): SQL<number> {
 }
 
 /**
- * `posted_at` inside the window. Uses drizzle's comparators rather than a raw
- * template so Date params get the timestamp mapping postgres.js needs.
+ * The budget date inside the window. Bounds are bound as ISO strings and cast
+ * in SQL: postgres.js has no mapping for a bare JS Date in a raw template.
  */
 export function postedInWindow(w: Window = {}): SQL {
   const clauses: SQL[] = [];
-  if (w.from) clauses.push(gte(transactions.postedAt, w.from));
-  if (w.to) clauses.push(lte(transactions.postedAt, w.to));
+  if (w.from) clauses.push(sql`${budgetAt} >= ${w.from.toISOString()}::timestamptz`);
+  if (w.to) clauses.push(sql`${budgetAt} <= ${w.to.toISOString()}::timestamptz`);
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : sql`true`;
+}
+
+/**
+ * When the money actually left the account, regardless of which month it's
+ * budgeted to. Only the reconciliation footer wants this — it's what balances
+ * "cash out this month" against "budgeted this month".
+ */
+export function cashPaidInWindow(w: Window = {}): SQL {
+  const clauses: SQL[] = [];
+  if (w.from) clauses.push(sql`${transactions.postedAt} >= ${w.from.toISOString()}::timestamptz`);
+  if (w.to) clauses.push(sql`${transactions.postedAt} <= ${w.to.toISOString()}::timestamptz`);
+  return clauses.length > 0 ? sql`(${sql.join(clauses, sql` and `)})` : sql`true`;
 }
 
 /**

@@ -88,6 +88,11 @@ export const transactions = pgTable(
     // a bill that really covers half a year. Slices are exact: each month gets
     // floor(amt*(k+1)/N) - floor(amt*k/N), so they always re-sum to the charge.
     amortizeMonths: integer("amortize_months"),
+    // Budget the charge into this calendar month instead of the one it posted
+    // in (null = use posted_at). For charges paid ahead of the period they
+    // cover — an August lease signed and paid in July. A user override, so
+    // unlike posted_at (which sync rewrites from Plaid every run) it sticks.
+    budgetMonth: date("budget_month"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

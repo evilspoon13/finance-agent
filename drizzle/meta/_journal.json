@@ -57,6 +57,13 @@
       "when": 1786904901347,
       "tag": "0007_goofy_thing",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787462426667,
+      "tag": "0008_greedy_paladin",
+      "breakpoints": true
     }
   ]
 }

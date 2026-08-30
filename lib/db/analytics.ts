@@ -18,7 +18,8 @@ import {
   inWindow,
   isOwnBankTransfer,
   isIgnored,
-  postedInWindow,
+  cashPaidInWindow,
+  budgetAt,
 } from "./spend-sql";
 
 /** pfc_detailed filter accepting one subcategory or a set (e.g. all dining types). */
@@ -485,13 +486,13 @@ export interface MonthSpend {
 export async function spendingByMonth(f: SpendingFilter = {}): Promise<MonthSpend[]> {
   const rows = await db
     .select({
-      month: sql<string>`to_char(date_trunc('month', ${transactions.postedAt}), 'YYYY-MM')`,
+      month: sql<string>`to_char(date_trunc('month', ${budgetAt}), 'YYYY-MM')`,
       totalCents: sql<number>`sum(${windowAmountCents(f)})::int`,
     })
     .from(transactions)
     .where(spendingWhere(f))
-    .groupBy(sql`date_trunc('month', ${transactions.postedAt})`)
-    .orderBy(sql`date_trunc('month', ${transactions.postedAt}) desc`);
+    .groupBy(sql`date_trunc('month', ${budgetAt})`)
+    .orderBy(sql`date_trunc('month', ${budgetAt}) desc`);
   return rows
     .filter((r) => r.month !== null)
     .map((r) => ({ month: r.month, totalCents: r.totalCents ?? 0 }));
@@ -861,9 +862,10 @@ export interface ExcludedSummary {
   inflowsCents: number; // money in (income, refunds, deposits), excluding P2P reimbursements
   ignoredCents: number; // rows the user marked "not spending" (IGNORE)
   /**
-   * Cash paid this window for amortized charges MINUS the slices charged to it —
-   * i.e. premium money that left the account now but is budgeted to later months
-   * (negative when this window is absorbing an earlier month's premium).
+   * Cash that left this window for charges budgeted to a different month, MINUS
+   * what other months' charges put on this one. Covers premiums spread across
+   * their term and charges pinned to the month they cover (an August lease paid
+   * in July). Negative when this window is absorbing earlier months' money.
    */
   deferredCents: number;
 }
@@ -887,22 +889,26 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
     .from(transactions)
     .where(where);
 
-  // Premium money that left the account in this window but is budgeted to other
-  // months (see windowAmountCents), so the footer still adds up to 100%.
-  // `paid` is cash that left in this window; `charged` is what this window is
-  // budgeted for, which can come from a premium posted in an earlier month — so
-  // the row set here is every amortized charge, not just this window's.
-  const inWindowSql = postedInWindow(f);
+  // Money that left the account in one month but is budgeted to another, so the
+  // footer still adds up to 100%. `paid` is cash that actually left in this
+  // window; `charged` is what this window is budgeted for, which can come from a
+  // charge posted in an earlier month — so the row set is every shifted charge,
+  // not just this window's.
+  const paidHere = cashPaidInWindow(f);
 
   const [amort] = await db
     .select({
-      paid: sql<number>`coalesce(sum(case when ${inWindowSql} then ${transactions.amountCents} else 0 end), 0)::int`,
-      charged: sql<number>`coalesce(sum(${windowAmountCents(f)}), 0)::int`,
+      paid: sql<number>`coalesce(sum(case when ${paidHere} then ${transactions.amountCents} else 0 end), 0)::int`,
+      // Gated on inWindow: a non-amortized row contributes its full amount from
+      // windowAmountCents (callers normally apply the date filter separately),
+      // and this query deliberately scans every shifted row, not just this
+      // window's.
+      charged: sql<number>`coalesce(sum(case when ${inWindow(f)} then ${windowAmountCents(f)} else 0 end), 0)::int`,
     })
     .from(transactions)
     .where(
       and(
-        sql`${transactions.amortizeMonths} is not null and ${transactions.amortizeMonths} > 1`,
+        sql`((${transactions.amortizeMonths} is not null and ${transactions.amortizeMonths} > 1) or ${transactions.budgetMonth} is not null)`,
         sql`${transactions.amountCents} > 0`,
         sql`${transactions.pending} = false`,
         spendRowPredicate(),
@@ -936,7 +942,7 @@ export interface AmortizedCharge {
  */
 export async function amortizedCharges(f: SpendingFilter = {}): Promise<AmortizedCharge[]> {
   const monthOffset = f.from
-    ? sql<number>`(${f.from.getUTCFullYear() * 12 + f.from.getUTCMonth()} - (extract(year from ${transactions.postedAt})::int * 12 + extract(month from ${transactions.postedAt})::int - 1))`
+    ? sql<number>`(${f.from.getUTCFullYear() * 12 + f.from.getUTCMonth()} - (extract(year from ${budgetAt})::int * 12 + extract(month from ${budgetAt})::int - 1))`
     : sql<number>`0`;
 
   const rows = await db

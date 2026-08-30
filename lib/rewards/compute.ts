@@ -41,9 +41,9 @@ function periodKeyFor(period: CapPeriod, date: Date): string {
 /**
  * Chronological, cap-aware pass over real purchases. For each purchase it
  * computes the optimal card and the reward delta vs the card actually used,
- * tracking Discover's $1,500/quarter 5% cap consumption (from actual Discover
- * spend in active categories) so recommendations stop favoring Discover once
- * the cap is hit.
+ * tracking each card's bonus-cap consumption (from actual spend put on it in
+ * capped categories) so recommendations stop favoring a card once its cap for
+ * the period is used up.
  *
  * `recomputeAndPersist` writes optimal_card_id + reward_delta_cents (the
  * persisted seam the future alerter reads). `analyzeRewards` returns the same
@@ -92,6 +92,13 @@ export interface GuideRow {
   effectiveBps: number;
 }
 
+/** A rotating-category card the user holds, for the page's "active now" note. */
+export interface RotatingSummary {
+  label: string;
+  bonusBps: number;
+  categories: RewardTag[];
+}
+
 export interface RewardsReport {
   perCard: PerCardSummary[];
   missed: MissedRow[];
@@ -99,6 +106,10 @@ export interface RewardsReport {
   totalEarnedCents: number;
   totalMissedCents: number;
   hasCards: boolean;
+  /** Rotating cards held and their categories this quarter (empty if none). */
+  rotating: RotatingSummary[];
+  /** Whether any held card earns miles, so the page mentions how they're valued. */
+  earnsMiles: boolean;
 }
 
 interface TxnResult {
@@ -136,6 +147,8 @@ const EMPTY_REPORT: RewardsReport = {
   totalEarnedCents: 0,
   totalMissedCents: 0,
   hasCards: false,
+  rotating: [],
+  earnsMiles: false,
 };
 
 export interface RewardWindow {
@@ -234,8 +247,8 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
 
       // Missed: a different card would have beaten the one ACTUALLY USED. Only
       // meaningful when a card was used — bank/savings outflows (rent, transfers,
-      // withdrawals, Zelle) aren't card-eligible, so "you should've used Discover"
-      // there is nonsense. Plaid mis-categorizes some of those into spend
+      // withdrawals, Zelle) aren't card-eligible, so "you should've used your
+      // 5% card" there is nonsense. Plaid mis-categorizes some of those into spend
       // categories, so gating on a real card is what filters them out.
       if (actualCardId && delta > 0 && best.cardId !== actualCardId) {
         totalMissed += delta;
@@ -273,11 +286,17 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
       totalEarnedCents: totalEarned,
       totalMissedCents: totalMissed,
       hasCards: cards.length > 0,
+      rotating: rotatingSummaries(cards, new Date()),
+      earnsMiles: cards.some((c) => c.earnRules.currency === "miles"),
     },
   };
 }
 
-const GUIDE_CATEGORIES: (RewardTag | "everything else")[] = [
+/**
+ * Every reward category the guide can rank, in display order. Which of them a
+ * given user sees depends on the cards they hold — see `guideCategoriesFor`.
+ */
+const GUIDE_CATEGORIES: RewardTag[] = [
   "dining",
   "grocery",
   "wholesale_club",
@@ -290,8 +309,42 @@ const GUIDE_CATEGORIES: (RewardTag | "everything else")[] = [
   "drugstore",
   "home_improvement",
   "united",
-  "everything else",
 ];
+
+/** Reward tags a card pays a bonus on (rotating cards: this quarter's set). */
+function bonusTagsOf(card: CardDef, on: Date): RewardTag[] {
+  const r = card.earnRules;
+  if (r.kind === "category") return Object.keys(r.bonuses) as RewardTag[];
+  if (r.kind === "tiered") return r.bonusTags;
+  if (r.kind === "rotating") return [...rotatingActive(r, on, new Set(discoverCategoriesFor(on)))];
+  return [];
+}
+
+/**
+ * The categories worth ranking for this user: ones some card they hold actually
+ * bonuses, plus the catch-all. Listing every category the app knows about would
+ * show rows that are only meaningful to someone holding that card (an airline
+ * co-brand's own-airline row, say) and answer them all with the same card.
+ */
+function guideCategoriesFor(cards: CardDef[], on: Date): (RewardTag | "everything else")[] {
+  const bonused = new Set(cards.flatMap((c) => bonusTagsOf(c, on)));
+  return [...GUIDE_CATEGORIES.filter((t) => bonused.has(t)), "everything else"];
+}
+
+/** Rotating cards held, with the categories active for `on`'s quarter. */
+function rotatingSummaries(cards: CardDef[], on: Date): RotatingSummary[] {
+  return cards.flatMap((c) =>
+    c.earnRules.kind === "rotating"
+      ? [
+          {
+            label: c.label,
+            bonusBps: c.earnRules.bonusBps,
+            categories: [...rotatingActive(c.earnRules, on, new Set(discoverCategoriesFor(on)))],
+          },
+        ]
+      : [],
+  );
+}
 
 function buildGuide(cards: CardDef[], cardById: Map<string, CardDef>): GuideRow[] {
   const ctx: RewardContext = {
@@ -300,7 +353,7 @@ function buildGuide(cards: CardDef[], cardById: Map<string, CardDef>): GuideRow[
     capRemaining: () => Infinity,
     milesValueCents: MILES_VALUE_CENTS,
   };
-  return GUIDE_CATEGORIES.map((cat) => {
+  return guideCategoriesFor(cards, ctx.date).map((cat) => {
     const tags = new Set<RewardTag>(cat === "everything else" ? [] : [cat]);
     const { best } = bestCard(cards, tags, 10_000, ctx); // representative $100
     return {

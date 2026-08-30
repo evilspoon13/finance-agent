@@ -30,8 +30,12 @@ const FF_JULY_TO_AUGUST: { id: string; memo: string }[] = [
   { id: "7AXDYrA0zLHNx563BpqBUdjDQdVqzLI850Opb", memo: "Move-in charge (paid 2026-07-24)" },
   { id: "Ndx8QQjgaZFYBZmk6v0KH6eJwk6p3rUoRb8MK", memo: "Move-in fee (paid 2026-07-23)" },
 ];
-/** Where the moved charges land: Aug 1, so they sit at the start of the month. */
-const AUGUST_START = new Date("2026-08-01T12:00:00Z");
+/**
+ * The month those charges budget under. Set via `budget_month`, NOT by editing
+ * posted_at: sync rewrites posted_at from Plaid on every run, so an edit there
+ * silently reverts and the rent shows up in July again.
+ */
+const AUGUST_BUDGET_MONTH = "2026-08-01";
 
 /**
  * Premiums Cam pays in full up front, and the term each one covers. Matched by
@@ -56,7 +60,7 @@ async function main() {
   for (const { id, memo } of FF_JULY_TO_AUGUST) {
     await db
       .update(transactions)
-      .set({ postedAt: AUGUST_START, userCategory: "RENT_AND_UTILITIES", userMemo: memo })
+      .set({ budgetMonth: AUGUST_BUDGET_MONTH, userCategory: "RENT_AND_UTILITIES", userMemo: memo })
       .where(eq(transactions.id, id));
   }
   // The one F&F charge already in August only needs the category pin.

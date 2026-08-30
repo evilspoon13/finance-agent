@@ -345,8 +345,8 @@ export default async function BudgetsPage(props: {
             <li className="flex justify-between">
               <span>
                 {excluded.deferredCents > 0
-                  ? "Premiums paid now, budgeted to later months"
-                  : "Premium paid in an earlier month, budgeted to this one"}
+                  ? "Paid this month, budgeted to other months (premiums, prepaid rent)"
+                  : "Paid in an earlier month, budgeted to this one (premiums, prepaid rent)"}
               </span>
               <span className="tabular-nums">{formatCents(excluded.deferredCents)}</span>
             </li>
