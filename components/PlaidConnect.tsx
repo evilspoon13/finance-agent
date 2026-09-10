@@ -117,18 +117,33 @@ export function PlaidConnect({ items }: { items: ItemDTO[] }) {
           if (!res.ok) throw new Error();
           setMsg("Reconnected and resynced.");
         } else {
+          // The exchange also pulls the account's full transaction history, so
+          // this request can run for a while on a busy account — say so rather
+          // than leaving the user on a bare spinner.
+          setMsg("Account linked — importing your transaction history…");
           const res = await fetch("/api/plaid/exchange", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ public_token: publicToken }),
           });
           if (!res.ok) throw new Error();
-          setMsg("Account linked.");
+          const data = (await res.json()) as {
+            imported: number | null;
+            sync_failed: boolean;
+            replaced: number;
+          };
+          const replaced = data.replaced > 0 ? " Replaced the previous link for this institution." : "";
+          setMsg(
+            data.sync_failed
+              ? "Account linked, but importing transactions failed — try Sync."
+              : `Account linked. Imported ${data.imported ?? 0} transactions.${replaced}`,
+          );
         }
         window.localStorage.removeItem(STATE_KEY);
         router.replace("/connections");
         router.refresh();
       } catch {
+        setMsg(null);
         setError("Something went wrong finishing the connection.");
       } finally {
         setBusy(false);

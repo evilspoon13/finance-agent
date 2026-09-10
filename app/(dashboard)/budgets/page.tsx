@@ -6,7 +6,6 @@ import {
   spendingDrilldown,
   listAccountsForFilter,
   peerToPeerNet,
-  excludedSummary,
   amortizedCharges,
   type DetailedSpend,
   type MerchantSpend,
@@ -77,12 +76,11 @@ export default async function BudgetsPage(props: {
     timeZone: "UTC",
   });
 
-  const [drill, budgets, accountOpts, p2p, excluded, amortized] = await Promise.all([
+  const [drill, budgets, accountOpts, p2p, amortized] = await Promise.all([
     spendingDrilldown({ from, to, accountId }),
     listBudgets(),
     listAccountsForFilter(),
     peerToPeerNet({ from, to, accountId }),
-    excludedSummary({ from, to, accountId }),
     amortizedCharges({ from, to, accountId }),
   ]);
 
@@ -308,51 +306,6 @@ export default async function BudgetsPage(props: {
           </button>
         </form>
       ) : null}
-
-      {/* ── Reconciliation: every other dollar that moved, so nothing is hidden ── */}
-      <div className="mt-10 rounded-lg border border-zinc-200 bg-zinc-50/50 p-4 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/30">
-        <p className="mb-2 font-semibold uppercase tracking-wide text-zinc-400">
-          Where the rest of {monthLabel}&rsquo;s money went (not counted as spending)
-        </p>
-        <ul className="space-y-1">
-          {p2pActive ? (
-            <li className="flex justify-between">
-              <span>
-                Peer-to-peer is counted net above: sent {formatCents(p2p.outCents)} − received{" "}
-                {formatCents(-p2p.inCents)} = <span className="text-foreground">{formatCents(p2p.netCents)}</span>
-              </span>
-            </li>
-          ) : null}
-          <li className="flex justify-between">
-            <span>Internal transfers (to savings &amp; investments)</span>
-            <span className="tabular-nums">{formatCents(excluded.internalTransfersCents)}</span>
-          </li>
-          <li className="flex justify-between">
-            <span>Credit-card payments (already counted on the cards)</span>
-            <span className="tabular-nums">{formatCents(excluded.ccPaymentsCents)}</span>
-          </li>
-          <li className="flex justify-between">
-            <span>Money in (income, refunds, deposits)</span>
-            <span className="tabular-nums">{formatCents(excluded.inflowsCents)}</span>
-          </li>
-          {excluded.ignoredCents !== 0 ? (
-            <li className="flex justify-between">
-              <span>Marked &ldquo;not spending&rdquo; by you</span>
-              <span className="tabular-nums">{formatCents(excluded.ignoredCents)}</span>
-            </li>
-          ) : null}
-          {excluded.deferredCents !== 0 ? (
-            <li className="flex justify-between">
-              <span>
-                {excluded.deferredCents > 0
-                  ? "Paid this month, budgeted to other months (premiums, prepaid rent)"
-                  : "Paid in an earlier month, budgeted to this one (premiums, prepaid rent)"}
-              </span>
-              <span className="tabular-nums">{formatCents(excluded.deferredCents)}</span>
-            </li>
-          ) : null}
-        </ul>
-      </div>
     </PageShell>
   );
 }

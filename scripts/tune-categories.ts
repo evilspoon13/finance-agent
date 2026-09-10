@@ -27,7 +27,7 @@ import { INSURANCE_CATEGORY } from "@/lib/category";
 /** July F&F charges → the August budget month (August lease start). */
 const FF_JULY_TO_AUGUST: { id: string; memo: string }[] = [
   { id: "8jZQgrp91NSjL1VraeKZirRBrYdNxgUm5LdEA", memo: "August rent + deposit (paid 2026-07-30)" },
-  { id: "7AXDYrA0zLHNx563BpqBUdjDQdVqzLI850Opb", memo: "Move-in charge (paid 2026-07-24)" },
+  { id: "PJDD8q563kfMr9j4NAL3HvJqo8PEvwU506NbqO", memo: "Move-in charge (paid 2026-07-24)" },
   { id: "Ndx8QQjgaZFYBZmk6v0KH6eJwk6p3rUoRb8MK", memo: "Move-in fee (paid 2026-07-23)" },
 ];
 /**

@@ -4,6 +4,10 @@ import { exchangePublicToken, newItemId } from "@/lib/plaid/link";
 import { fetchAccounts } from "@/lib/plaid/accounts";
 import { encrypt } from "@/lib/crypto";
 import { upsertItem, upsertAccounts } from "@/lib/db/queries";
+import { syncItemById } from "@/lib/plaid/sync";
+import { seedCards } from "@/lib/db/rewards-queries";
+import { recomputeAndPersist } from "@/lib/rewards/compute";
+import { supersedeDuplicateItems, type SupersededItem } from "@/lib/db/relink-queries";
 
 const bodySchema = z.object({ public_token: z.string().min(1) });
 
@@ -31,10 +35,45 @@ export async function POST(request: Request) {
     });
     const count = await upsertAccounts(item.id, fetched.accounts);
 
+    // Pull history immediately: the item's cursor is unset, so this first sync
+    // fetches everything the institution will give us (see syncTransactions).
+    // Without it a freshly linked account shows balances but no transactions
+    // until something else syncs. A failure here does NOT fail the link — the
+    // item is already saved, so the Sync button can retry.
+    let imported: number | null = null;
+    let syncError: string | null = null;
+    let superseded: SupersededItem[] = [];
+    try {
+      const result = await syncItemById(item.id);
+      if (result.error) {
+        syncError = result.error;
+      } else {
+        imported = result.added;
+        await seedCards();
+        // Only after the new item holds its own history, so overrides have
+        // twins to move onto: drop any older link this one replaces, or the
+        // same cards get counted twice everywhere.
+        superseded = await supersedeDuplicateItems(item.id);
+        await recomputeAndPersist();
+      }
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : String(err);
+    }
+    if (syncError) console.error("initial sync after link failed:", syncError);
+    for (const s of superseded) {
+      console.log(
+        `replaced stale ${s.institution} link ${s.itemId}: -${s.accounts} accounts, ` +
+          `-${s.transactions} transactions, ${s.overridesMoved} overrides carried over`,
+      );
+    }
+
     return NextResponse.json({
       item_id: item.id,
       institution: fetched.institutionName,
       accounts: count,
+      imported,
+      sync_failed: syncError !== null,
+      replaced: superseded.length,
     });
   } catch (err) {
     console.error("exchange error:", err instanceof Error ? err.message : err);
