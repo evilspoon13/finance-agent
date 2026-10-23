@@ -1,15 +1,12 @@
-import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
+import { hasBearer } from "@/lib/auth/bearer";
 import { syncAll } from "@/lib/plaid/sync";
 
 // POST /api/cron/sync -> the scheduled daily sync. Outside the session gate
 // (proxy.ts), so it authenticates with `Authorization: Bearer $CRON_SECRET`.
 export async function POST(request: Request) {
-  const secret = env().CRON_SECRET;
-  const given = Buffer.from(request.headers.get("authorization") ?? "");
-  const expected = Buffer.from(`Bearer ${secret}`);
-  if (!secret || given.length !== expected.length || !timingSafeEqual(given, expected)) {
+  if (!hasBearer(request, env().CRON_SECRET)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -21,6 +21,11 @@ const coreSchema = z.object({
     }, "TOKEN_ENC_KEY must be a base64-encoded 32-byte key (openssl rand -base64 32)"),
   // Bearer token for /api/cron/sync (the scheduled daily sync). Unset = disabled.
   CRON_SECRET: z.string().min(16).optional().or(z.literal("")),
+  // Scheduled finance agent (see docs/agent.md). Each is optional; the agent
+  // endpoints answer 503 until AGENT_TOKEN and DATABASE_URL_READONLY are set.
+  AGENT_TOKEN: z.string().min(32).optional().or(z.literal("")),
+  DATABASE_URL_READONLY: z.string().optional(),
+  DISCORD_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
 });
 
 const plaidSchema = z.object({

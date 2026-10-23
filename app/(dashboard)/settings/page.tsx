@@ -1,17 +1,54 @@
 import { PageShell } from "@/components/PageShell";
 import { listRules } from "@/lib/db/rules-queries";
 import { humanizeCategory, BUDGETABLE_CATEGORIES } from "@/lib/category";
-import { createRuleAction, deleteRuleAction } from "./actions";
+import { getContext, GOALS_KEY } from "@/lib/db/agent-queries";
+import { env } from "@/lib/env";
+import { createRuleAction, deleteRuleAction, saveGoalsAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 const ruleCategoryLabel = (c: string) => (c === "IGNORE" ? "Not spending" : humanizeCategory(c));
 
 export default async function SettingsPage() {
-  const rules = await listRules();
+  const [rules, goals] = await Promise.all([listRules(), getContext(GOALS_KEY)]);
+  const { AGENT_TOKEN, DATABASE_URL_READONLY, DISCORD_WEBHOOK_URL } = env();
+  const agentReady = Boolean(AGENT_TOKEN && DATABASE_URL_READONLY);
 
   return (
     <PageShell title="Settings">
+      <section className="mb-10 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold">Goals</h3>
+          <p className="text-sm text-zinc-500">
+            What your scheduled finance agent measures progress against: savings targets, contribution plans,
+            deadlines, rules of thumb. Plain text or markdown. Its reports are on the{" "}
+            <a href="/briefings" className="underline">
+              Briefings
+            </a>{" "}
+            page.
+          </p>
+        </div>
+        <form action={saveGoalsAction} className="space-y-2">
+          <textarea
+            name="goals"
+            rows={10}
+            defaultValue={goals ?? ""}
+            placeholder={"- Save 30% of gross pay\n- Max the Roth IRA by April\n- Keep 6 months of expenses in cash"}
+            className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 font-mono text-base sm:text-sm dark:border-zinc-700"
+          />
+          <button
+            type="submit"
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Save goals
+          </button>
+        </form>
+        <p className="text-xs text-zinc-500">
+          Agent access: {agentReady ? "configured" : "not configured (set AGENT_TOKEN and DATABASE_URL_READONLY)"} ·
+          Discord: {DISCORD_WEBHOOK_URL ? "configured" : "not configured (set DISCORD_WEBHOOK_URL)"}
+        </p>
+      </section>
+
       <section className="space-y-4">
         <div>
           <h3 className="text-sm font-semibold">Category rules</h3>

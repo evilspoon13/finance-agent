@@ -5,8 +5,8 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
  * Single-user auth gate. Every request (pages, server actions, API routes)
  * needs a valid session cookie, except the login page and the two machine
  * endpoints, which authenticate themselves: the Plaid webhook (Plaid-signed
- * JWT, see lib/plaid/webhook-verify.ts) and the scheduled sync (bearer
- * CRON_SECRET). The session is a stateless signed JWT, so this check is
+ * JWT, see lib/plaid/webhook-verify.ts), the scheduled sync (bearer
+ * CRON_SECRET) and the finance agent's /api/agent/* (bearer AGENT_TOKEN). The session is a stateless signed JWT, so this check is
  * complete on its own — no DB lookup.
  */
 
@@ -14,7 +14,7 @@ const PUBLIC_PATHS = new Set(["/login", "/api/plaid/webhook", "/api/cron/sync"])
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
-  if (PUBLIC_PATHS.has(pathname)) return NextResponse.next();
+  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith("/api/agent/")) return NextResponse.next();
 
   if (await verifySession(request.cookies.get(SESSION_COOKIE)?.value)) return NextResponse.next();
 

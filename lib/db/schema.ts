@@ -214,6 +214,35 @@ export const categoryRules = pgTable("category_rules", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Free-form context for the scheduled finance agent, keyed by name. Today one
+ * row, "goals": a markdown doc of the user's goals and rules the agent measures
+ * progress against. Kept in the DB so personal targets never live in the repo.
+ */
+export const agentContext = pgTable("agent_context", {
+  key: text("key").primaryKey(),
+  body: text("body").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * What the agent reported on each run. Its own history (so it doesn't repeat a
+ * flag) and the /briefings page. `notified` = also sent to Discord.
+ */
+export const agentBriefings = pgTable(
+  "agent_briefings",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(), // daily | weekly | adhoc
+    title: text("title").notNull(),
+    body: text("body").notNull(), // markdown
+    notified: boolean("notified").notNull().default(false),
+    sessionUrl: text("session_url"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("agent_briefings_created_idx").on(t.createdAt)],
+);
+
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
 export type Account = typeof accounts.$inferSelect;
@@ -231,3 +260,4 @@ export type NewCard = typeof cards.$inferInsert;
 export type Budget = typeof budgets.$inferSelect;
 export type NewBudget = typeof budgets.$inferInsert;
 export type CategoryRule = typeof categoryRules.$inferSelect;
+export type AgentBriefing = typeof agentBriefings.$inferSelect;

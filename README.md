@@ -35,6 +35,9 @@ Copy `.env.example` to `.env` and fill it in:
 | `PLAID_WEBHOOK_URL`     | no       | `https://<your-app>/api/plaid/webhook`, for automatic updates             |
 | `PLAID_REDIRECT_URI`    | no       | `https://<your-app>/connections`, required by OAuth banks in production   |
 | `CRON_SECRET`           | no       | Enables `POST /api/cron/sync` for a scheduled daily sync                  |
+| `AGENT_TOKEN`           | no       | Enables the finance agent's `/api/agent/*` endpoints (bearer token)       |
+| `DATABASE_URL_READONLY` | no       | Direct URL for a read-only role, used by the agent's query endpoint       |
+| `DISCORD_WEBHOOK_URL`   | no       | Discord channel webhook for the agent's alerts                            |
 
 Keep `TOKEN_ENC_KEY` with your data: a database restored under a different key can't
 decrypt its Plaid tokens, and every institution would need re-linking.
@@ -97,6 +100,33 @@ pg_restore --no-owner --no-acl -d "<neon direct url>" finance.dump
 
 Then set the **same** `TOKEN_ENC_KEY` as the old install, and deploy: migrations pick up
 from where the old database left off.
+
+## Finance agent (optional)
+
+A Claude Code scheduled task can check in on your finances, dig into anything unusual through a
+read-only SQL endpoint, and post a briefing to Discord with a link back to the conversation. Its
+instructions live in [`docs/agent.md`](docs/agent.md); briefings show up on the **Briefings**
+page and your goals are edited in **Settings**.
+
+1. Create a read-only Postgres role. The agent must not read Plaid tokens:
+
+   ```sql
+   create role agent_ro with login password '<password>';
+   grant usage on schema public to agent_ro;
+   grant select on all tables in schema public to agent_ro;
+   revoke select on items from agent_ro;
+   grant select (id, institution_name, status, created_at, updated_at) on items to agent_ro;
+   alter default privileges in schema public grant select on tables to agent_ro;
+   ```
+
+2. Set `AGENT_TOKEN`, `DATABASE_URL_READONLY` (that role, on a **direct** connection) and
+   `DISCORD_WEBHOOK_URL` (Discord: channel settings → Integrations → Webhooks).
+3. At [claude.ai/code](https://claude.ai/code), create a cloud environment (the environment
+   selector under the message box → **New environment**) with the variable
+   `APP_URL=https://<your-app>` and a **network secret** of type Bearer for your app's host whose
+   value is `AGENT_TOKEN`. The secret also lets sessions reach that host, so the network access
+   level can stay at the default. Then create scheduled tasks on this repository, in that
+   environment, whose prompts say to follow `docs/agent.md`.
 
 ## Development
 
