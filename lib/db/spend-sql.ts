@@ -3,7 +3,7 @@ import { transactions } from "./schema";
 
 /**
  * Shared SQL fragments for "what counts as spending" so the budgets page, the
- * dashboard, and the AI agent all agree — including the peer-to-peer override.
+ * dashboard, and the transaction list all agree — including user overrides.
  *
  * Plaid buckets Venmo/Zelle/CashApp payments under TRANSFER_OUT_FROM_APPS and
  * excludes them from spending (they look like transfers). The user categorizes
@@ -27,19 +27,9 @@ export const IGNORE_CATEGORY = "IGNORE";
 export const REIMBURSEMENT_CATEGORY = "REIMBURSEMENT";
 
 /** Money-movement categories that are never consumption on their own. */
-export const NON_SPEND_PRIMARY = ["TRANSFER_IN", "TRANSFER_OUT"];
+const NON_SPEND_PRIMARY = ["TRANSFER_IN", "TRANSFER_OUT"];
 /** Detailed codes dropped even inside a spend primary (card payments). */
-export const NON_SPEND_DETAILED = ["LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"];
-
-/**
- * Merchants that are the user's OWN other bank, so money sent there is an
- * internal transfer, not spending — Plaid can't know this and files them under
- * LOAN_PAYMENTS_OTHER_PAYMENT, which would otherwise count as consumption.
- * Matched case-insensitively against merchant name and raw name. Keep entries
- * specific: the matching SoFi leg of these transfers already arrives as
- * TRANSFER_IN, and a bare "SOFI" would also swallow SoFi Stadium.
- */
-export const OWN_BANK_MERCHANTS = ["MEMBERS CHOICE CREDIT UNION"];
+const NON_SPEND_DETAILED = ["LOAN_PAYMENTS_CREDIT_CARD_PAYMENT"];
 
 // The sentinel embedded as a SQL literal (not a bound parameter). This matters
 // for `effectiveCategory`: it appears in both SELECT and GROUP BY, and Postgres
@@ -50,17 +40,14 @@ const IGNORE_LITERAL = sql.raw(`'${IGNORE_CATEGORY}'`);
 const REIMBURSEMENT_LITERAL = sql.raw(`'${REIMBURSEMENT_CATEGORY}'`);
 
 /** True when the user has tagged a P2P payment with a real budget category. */
-export const isCategorizedP2P: SQL = sql`(${transactions.userCategory} is not null and ${transactions.userCategory} not in (${IGNORE_LITERAL}, ${REIMBURSEMENT_LITERAL}))`;
-
-/** An incoming payment the user tagged as paying them back (see REIMBURSEMENT_CATEGORY). */
-export const isReimbursement: SQL = sql`coalesce(${transactions.userCategory}, '') = ${REIMBURSEMENT_LITERAL}`;
+const isCategorizedP2P: SQL = sql`(${transactions.userCategory} is not null and ${transactions.userCategory} not in (${IGNORE_LITERAL}, ${REIMBURSEMENT_LITERAL}))`;
 
 /**
  * The user's own share of a row: the charge minus what others paid back. This
  * is what budgets count; rewards still use the full amount_cents (the card
  * earned on the whole bill).
  */
-export const netAmountCents: SQL<number> = sql<number>`(${transactions.amountCents} - coalesce(${transactions.reimbursedCents}, 0))`;
+const netAmountCents: SQL<number> = sql<number>`(${transactions.amountCents} - coalesce(${transactions.reimbursedCents}, 0))`;
 
 /**
  * The category a transaction counts under: a user-assigned P2P category wins,
@@ -82,9 +69,9 @@ export function spendRowPredicate(): SQL {
   );
   const normalSpend = sql.join([...transferExcl, ...detailedExcl], sql` and `);
   // An explicit IGNORE always wins, on any row — not just P2P. It means the user
-  // looked at this charge and said it isn't consumption (e.g. moving money to
-  // their own other bank), and that judgment outranks Plaid's category.
-  return sql`(not ${isIgnored} and ((${normalSpend}) or ${isCategorizedP2P}) and not ${isOwnBankTransfer})`;
+  // (or one of their category rules) said it isn't consumption — e.g. moving
+  // money to their own other bank — and that outranks Plaid's category.
+  return sql`(not ${isIgnored} and ((${normalSpend}) or ${isCategorizedP2P}))`;
 }
 
 /**
@@ -93,20 +80,7 @@ export function spendRowPredicate(): SQL {
  * `user_category = 'IGNORE'` is NULL, and `not NULL` is NULL, which would drop
  * every ordinary purchase from spending.
  */
-export const isIgnored: SQL = sql`coalesce(${transactions.userCategory}, '') = ${IGNORE_LITERAL}`;
-
-/**
- * Money moved to the user's own other bank (see OWN_BANK_MERCHANTS). Excluded
- * from spending, and added to the "internal transfers" bucket of the
- * reconciliation footer so the money is still accounted for.
- */
-export const isOwnBankTransfer: SQL = sql`(${sql.join(
-  OWN_BANK_MERCHANTS.map(
-    (m) =>
-      sql`upper(coalesce(${transactions.merchantName}, '') || ' ' || ${transactions.name}) like ${`%${m}%`}`,
-  ),
-  sql` or `,
-)})`;
+const isIgnored: SQL = sql`coalesce(${transactions.userCategory}, '') = ${IGNORE_LITERAL}`;
 
 // ---------------------------------------------------------------------------
 // Amortized charges (a lump premium spread across the months it covers)
@@ -172,23 +146,11 @@ export function windowAmountCents(w: Window = {}): SQL<number> {
  * The budget date inside the window. Bounds are bound as ISO strings and cast
  * in SQL: postgres.js has no mapping for a bare JS Date in a raw template.
  */
-export function postedInWindow(w: Window = {}): SQL {
+function postedInWindow(w: Window = {}): SQL {
   const clauses: SQL[] = [];
   if (w.from) clauses.push(sql`${budgetAt} >= ${w.from.toISOString()}::timestamptz`);
   if (w.to) clauses.push(sql`${budgetAt} <= ${w.to.toISOString()}::timestamptz`);
   return clauses.length > 0 ? sql.join(clauses, sql` and `) : sql`true`;
-}
-
-/**
- * When the money actually left the account, regardless of which month it's
- * budgeted to. Only the reconciliation footer wants this — it's what balances
- * "cash out this month" against "budgeted this month".
- */
-export function cashPaidInWindow(w: Window = {}): SQL {
-  const clauses: SQL[] = [];
-  if (w.from) clauses.push(sql`${transactions.postedAt} >= ${w.from.toISOString()}::timestamptz`);
-  if (w.to) clauses.push(sql`${transactions.postedAt} <= ${w.to.toISOString()}::timestamptz`);
-  return clauses.length > 0 ? sql`(${sql.join(clauses, sql` and `)})` : sql`true`;
 }
 
 /**

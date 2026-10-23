@@ -2,7 +2,7 @@ import Link from "next/link";
 import { PageShell } from "@/components/PageShell";
 import { Section } from "@/components/Section";
 import { analyzeRewards, type RewardWindow, type RewardsReport } from "@/lib/rewards/compute";
-import { quarterKey, MILES_VALUE_CENTS } from "@/lib/rewards/config";
+import { quarterKey } from "@/lib/rewards/config";
 import { formatCents } from "@/lib/money";
 import { rewardCategoryLabel } from "@/lib/rewards/reward-categories";
 import type { RawSearchParams } from "@/lib/filters";
@@ -36,7 +36,6 @@ function subtitleFor(report: RewardsReport, now: Date): string {
       : "not announced yet";
     parts.push(`${r.label} ${quarterKey(now)} ${r.bonusBps / 100}%: ${cats}.`);
   }
-  if (report.earnsMiles) parts.push(`Miles valued at ${MILES_VALUE_CENTS}¢.`);
   return parts.join(" ");
 }
 
@@ -177,21 +176,21 @@ function MissedBody({ report }: { report: RewardsReport }) {
         <table className="w-full text-sm">
           <thead className="bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
             <tr>
-              <th className="px-3 py-2 font-medium">Date</th>
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">Date</th>
               <th className="px-3 py-2 font-medium">Merchant</th>
-              <th className="px-3 py-2 font-medium">Used</th>
-              <th className="px-3 py-2 font-medium">Should have used</th>
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">Used</th>
+              <th className="px-3 py-2 font-medium">Better card</th>
               <th className="px-3 py-2 text-right font-medium">Missed</th>
             </tr>
           </thead>
           <tbody>
             {report.missed.slice(0, 50).map((m) => (
               <tr key={m.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                <td className="px-3 py-2 whitespace-nowrap text-zinc-500">
+                <td className="hidden px-3 py-2 whitespace-nowrap text-zinc-500 sm:table-cell">
                   {m.postedAt ? m.postedAt.toISOString().slice(0, 10) : "—"}
                 </td>
                 <td className="px-3 py-2">{m.label}</td>
-                <td className="px-3 py-2 text-zinc-500">{m.actualLabel}</td>
+                <td className="hidden px-3 py-2 text-zinc-500 sm:table-cell">{m.actualLabel}</td>
                 <td className="px-3 py-2">{m.optimalLabel}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-amber-600 dark:text-amber-400">
                   {formatCents(m.deltaCents)}

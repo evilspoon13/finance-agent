@@ -10,20 +10,14 @@ import {
   rotatingActive,
   type RewardContext,
 } from "./engine";
-import {
-  DISCOVER_CAP_CENTS,
-  MILES_VALUE_CENTS,
-  discoverCategoriesFor,
-  quarterKey,
-  type RewardTag,
-} from "./config";
-import type { CardDef, CapPeriod } from "./catalog";
+import { quarterKey, type RewardTag } from "./config";
+import type { CardDef, CapPeriod } from "./rules";
 
 /** Cap definition for a card's bonus (capKey = a reward tag, or "rotating"). */
 function capInfo(card: CardDef, capKey: string): { cents: number; period: CapPeriod } | null {
   const r = card.earnRules;
   if (r.kind === "rotating" && capKey === "rotating") {
-    return { cents: r.capCents ?? DISCOVER_CAP_CENTS, period: r.capPeriod ?? "quarter" };
+    return r.capCents != null ? { cents: r.capCents, period: r.capPeriod ?? "quarter" } : null;
   }
   if (r.kind === "category" && r.caps) {
     const c = r.caps[capKey as RewardTag];
@@ -108,8 +102,6 @@ export interface RewardsReport {
   hasCards: boolean;
   /** Rotating cards held and their categories this quarter (empty if none). */
   rotating: RotatingSummary[];
-  /** Whether any held card earns miles, so the page mentions how they're valued. */
-  earnsMiles: boolean;
 }
 
 interface TxnResult {
@@ -148,7 +140,6 @@ const EMPTY_REPORT: RewardsReport = {
   totalMissedCents: 0,
   hasCards: false,
   rotating: [],
-  earnsMiles: false,
 };
 
 export interface RewardWindow {
@@ -188,7 +179,7 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
     const r = card.earnRules;
     let capKey: string | null = null;
     if (r.kind === "rotating") {
-      const active = rotatingActive(r, when, new Set(discoverCategoriesFor(when)));
+      const active = rotatingActive(r, when);
       if ([...ts].some((tag) => active.has(tag))) capKey = "rotating";
     } else if (r.kind === "category" && r.caps) {
       const chosen = matchedCategoryTag(r, ts);
@@ -216,12 +207,7 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
       if (!info) return Infinity;
       return Math.max(0, info.cents - getSpent(cardId, capKey, periodKeyFor(info.period, when)));
     };
-    const ctx: RewardContext = {
-      date: when,
-      discoverActive: new Set(discoverCategoriesFor(when)),
-      capRemaining,
-      milesValueCents: MILES_VALUE_CENTS,
-    };
+    const ctx: RewardContext = { date: when, capRemaining };
 
     const tags = deriveTags(t);
     const { best } = bestCard(cards, tags, t.amountCents, ctx);
@@ -287,7 +273,6 @@ async function analyze(window?: RewardWindow): Promise<Analysis> {
       totalMissedCents: totalMissed,
       hasCards: cards.length > 0,
       rotating: rotatingSummaries(cards, new Date()),
-      earnsMiles: cards.some((c) => c.earnRules.currency === "miles"),
     },
   };
 }
@@ -314,10 +299,7 @@ const GUIDE_CATEGORIES: RewardTag[] = [
 /** Reward tags a card pays a bonus on (rotating cards: this quarter's set). */
 function bonusTagsOf(card: CardDef, on: Date): RewardTag[] {
   const r = card.earnRules;
-  if (r.kind === "category") return Object.keys(r.bonuses) as RewardTag[];
-  if (r.kind === "tiered") return r.bonusTags;
-  if (r.kind === "rotating") return [...rotatingActive(r, on, new Set(discoverCategoriesFor(on)))];
-  return [];
+  return r.kind === "category" ? (Object.keys(r.bonuses) as RewardTag[]) : [...rotatingActive(r, on)];
 }
 
 /**
@@ -339,7 +321,7 @@ function rotatingSummaries(cards: CardDef[], on: Date): RotatingSummary[] {
           {
             label: c.label,
             bonusBps: c.earnRules.bonusBps,
-            categories: [...rotatingActive(c.earnRules, on, new Set(discoverCategoriesFor(on)))],
+            categories: [...rotatingActive(c.earnRules, on)],
           },
         ]
       : [],
@@ -347,12 +329,7 @@ function rotatingSummaries(cards: CardDef[], on: Date): RotatingSummary[] {
 }
 
 function buildGuide(cards: CardDef[], cardById: Map<string, CardDef>): GuideRow[] {
-  const ctx: RewardContext = {
-    date: new Date(),
-    discoverActive: new Set(discoverCategoriesFor(new Date())),
-    capRemaining: () => Infinity,
-    milesValueCents: MILES_VALUE_CENTS,
-  };
+  const ctx: RewardContext = { date: new Date(), capRemaining: () => Infinity };
   return guideCategoriesFor(cards, ctx.date).map((cat) => {
     const tags = new Set<RewardTag>(cat === "everything else" ? [] : [cat]);
     const { best } = bestCard(cards, tags, 10_000, ctx); // representative $100
@@ -373,11 +350,16 @@ export async function analyzeRewards(window?: RewardWindow): Promise<RewardsRepo
 /** Compute and persist optimal_card_id + reward_delta_cents for every purchase. */
 export async function recomputeAndPersist(): Promise<{ updated: number; report: RewardsReport }> {
   const { results, report } = await analyze();
-  for (const r of results) {
-    await db
-      .update(transactions)
-      .set({ optimalCardId: r.optimalCardId, rewardDeltaCents: r.deltaCents })
-      .where(eq(transactions.id, r.id));
-  }
-  return { updated: results.length, report };
+  if (results.length === 0) return { updated: 0, report };
+  // One statement for every row (passed as a single JSON parameter), touching
+  // only rows whose values changed — a per-row UPDATE is ~1k round-trips.
+  const rows = results.map((r) => ({ id: r.id, card: r.optimalCardId, delta: r.deltaCents }));
+  const changed = await db.execute(sql`
+    update ${transactions} t
+    set optimal_card_id = v.card, reward_delta_cents = v.delta
+    from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as v(id text, card text, delta int)
+    where t.id = v.id
+      and (t.optimal_card_id is distinct from v.card or t.reward_delta_cents is distinct from v.delta)
+    returning t.id`);
+  return { updated: changed.length, report };
 }

@@ -12,7 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * Drizzle schema for the personal finance aggregator (§4 of the build spec).
+ * Drizzle schema for the personal finance aggregator.
  *
  * Conventions:
  *  - Money is stored as integer cents (never floats). See lib/money.
@@ -23,8 +23,6 @@ import {
  */
 
 export const itemStatusEnum = pgEnum("item_status", ["good", "login_required", "error"]);
-export const alertKindEnum = pgEnum("alert_kind", ["budget", "wrong_card", "anomaly"]);
-export const messageRoleEnum = pgEnum("message_role", ["user", "assistant"]);
 
 /** One row per Plaid connection (per institution). */
 export const items = pgTable("items", {
@@ -72,25 +70,26 @@ export const transactions = pgTable(
     pendingTransactionId: text("pending_transaction_id"),
     authorizedAt: timestamp("authorized_at", { withTimezone: true }),
     postedAt: timestamp("posted_at", { withTimezone: true }),
-    // Phase 4 computed columns (seams for the deferred alerter).
+    // Computed by the rewards pass (lib/rewards/compute.ts) on every sync.
     optimalCardId: text("optimal_card_id"),
     rewardDeltaCents: integer("reward_delta_cents"),
-    // User-assigned budget category for peer-to-peer app payments (Venmo/Zelle/
-    // CashApp). Plaid buckets these under TRANSFER_OUT_FROM_APPS with no idea what
-    // they were for, so the user tags each one: a BUDGETABLE_CATEGORIES code makes
-    // it count as real spend, the sentinel "IGNORE" dismisses it, null = not yet
-    // reviewed. `userMemo` is the free-text note ("rent", "car payment").
+    // User override of the budget category (set in the transaction editor, the
+    // P2P review queue, or by a category rule). A BUDGETABLE_CATEGORIES code
+    // counts the row as spend in that category — this is how Venmo/Zelle/CashApp
+    // payments, which Plaid files as TRANSFER_OUT_FROM_APPS, become real spend.
+    // The sentinel "IGNORE" drops it from spending, "REIMBURSEMENT" marks an
+    // incoming payback, null = Plaid's category. `userMemo` is a free-text note.
     userCategory: text("user_category"),
     userMemo: text("user_memo"),
     // Spread this charge evenly across N budget months starting with the month
     // it posted (null = counts entirely in its own month). For premiums paid in
-    // one lump — 6-month auto/renters insurance — so a month isn't blown out by
-    // a bill that really covers half a year. Slices are exact: each month gets
+    // one lump — e.g. 6-month auto insurance — so a month isn't blown out by a
+    // bill that really covers half a year. Slices are exact: each month gets
     // floor(amt*(k+1)/N) - floor(amt*k/N), so they always re-sum to the charge.
     amortizeMonths: integer("amortize_months"),
     // Budget the charge into this calendar month instead of the one it posted
     // in (null = use posted_at). For charges paid ahead of the period they
-    // cover — an August lease signed and paid in July. A user override, so
+    // cover — rent paid on the 30th for the next month. A user override, so
     // unlike posted_at (which sync rewrites from Plaid every run) it sticks.
     budgetMonth: date("budget_month"),
     // How much of this charge other people paid back (null = none). For a bill
@@ -112,7 +111,7 @@ export const transactions = pgTable(
   ],
 );
 
-/** Investment positions (Schwab). quantity kept as numeric (fractional shares). */
+/** Investment positions. quantity kept as numeric (fractional shares). */
 export const holdings = pgTable(
   "holdings",
   {
@@ -180,23 +179,19 @@ export const netWorthSnapshots = pgTable("net_worth_snapshots", {
   capturedAt: timestamp("captured_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** Card config for the rewards engine (seeded; see §7). */
+/**
+ * The user's credit cards and their reward rules (see lib/rewards/rules.ts).
+ * Sync creates a default 1% card for each new credit account; the user edits
+ * the real rates on the Cards page. Fee, sign-up bonus and notes are display-only.
+ */
 export const cards = pgTable("cards", {
   id: text("id").primaryKey(),
   accountId: text("account_id").references(() => accounts.id, { onDelete: "set null" }),
   label: text("label").notNull(),
-  network: text("network").notNull(),
   earnRules: jsonb("earn_rules").notNull(),
-  discoverCapCents: integer("discover_cap_cents"),
-  cashbackMatchYearOne: boolean("cashback_match_year_one").notNull().default(false),
-  // AI-driven rewards: the user must confirm what the AI found before a card
-  // counts toward recommendations. `aiSuggestion` caches the raw lookup for the
-  // confirm UI; fee/signup/notes are display-only info.
-  rewardsConfirmed: boolean("rewards_confirmed").notNull().default(false),
   annualFeeCents: integer("annual_fee_cents"),
   signupBonus: text("signup_bonus"),
-  aiNotes: text("ai_notes"),
-  aiSuggestion: jsonb("ai_suggestion"),
+  notes: text("notes"),
 });
 
 export const budgets = pgTable("budgets", {
@@ -206,53 +201,18 @@ export const budgets = pgTable("budgets", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** Schema only for now; nothing writes here until Phase 5. */
-export const alerts = pgTable("alerts", {
+/**
+ * "Merchant contains X → category" rules. Applied when written (to every
+ * matching transaction without an override yet) and by sync to new rows, by
+ * setting `transactions.user_category` — so the spend SQL never has to know
+ * about rules. `category` is a budget category or the IGNORE sentinel.
+ */
+export const categoryRules = pgTable("category_rules", {
   id: text("id").primaryKey(),
-  kind: alertKindEnum("kind").notNull(),
-  payload: jsonb("payload").notNull(),
+  match: text("match").notNull(), // case-insensitive substring of merchant name or description
+  category: text("category").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  sentAt: timestamp("sent_at", { withTimezone: true }),
 });
-
-/**
- * Cache for generated AI insights. `fingerprint` captures the underlying
- * spending (count + sum + latest updated_at) so a cached insight is reused
- * until the spending in that scope actually changes.
- */
-export const aiCache = pgTable("ai_cache", {
-  scope: text("scope").primaryKey(), // e.g. insight:<from>:<to>:<account>
-  fingerprint: text("fingerprint").notNull(),
-  model: text("model").notNull(),
-  content: text("content").notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-/**
- * AI chat persistence. One row per conversation; messages hold only the visible
- * user/assistant turns (tool calls stay ephemeral) — that's all the agent needs
- * to reconstruct history and keeps the per-request token footprint small.
- */
-export const conversations = pgTable("conversations", {
-  id: text("id").primaryKey(), // app-generated uuid
-  title: text("title").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
-
-export const messages = pgTable(
-  "messages",
-  {
-    id: text("id").primaryKey(), // app-generated uuid
-    conversationId: text("conversation_id")
-      .notNull()
-      .references(() => conversations.id, { onDelete: "cascade" }),
-    role: messageRoleEnum("role").notNull(),
-    content: text("content").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [index("messages_conversation_idx").on(t.conversationId)],
-);
 
 export type Item = typeof items.$inferSelect;
 export type NewItem = typeof items.$inferInsert;
@@ -270,9 +230,4 @@ export type Card = typeof cards.$inferSelect;
 export type NewCard = typeof cards.$inferInsert;
 export type Budget = typeof budgets.$inferSelect;
 export type NewBudget = typeof budgets.$inferInsert;
-export type Alert = typeof alerts.$inferSelect;
-export type NewAlert = typeof alerts.$inferInsert;
-export type Conversation = typeof conversations.$inferSelect;
-export type NewConversation = typeof conversations.$inferInsert;
-export type Message = typeof messages.$inferSelect;
-export type NewMessage = typeof messages.$inferInsert;
+export type CategoryRule = typeof categoryRules.$inferSelect;

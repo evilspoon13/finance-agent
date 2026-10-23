@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { CountryCode, Products } from "plaid";
 import { plaid } from "./client";
-import { plaidEnv, env } from "@/lib/env";
+import { plaidEnv, authEnv } from "@/lib/env";
 
 /**
  * Plaid Link lifecycle wrappers: create a link_token, and exchange a
@@ -10,7 +10,7 @@ import { plaidEnv, env } from "@/lib/env";
 
 /** Stable per-user client_user_id for a single-user app. */
 function clientUserId(): string {
-  return `owner:${env().APP_OWNER_NAME}`;
+  return `owner:${authEnv().AUTH_USERNAME}`;
 }
 
 export async function createLinkToken(): Promise<string> {
@@ -19,9 +19,8 @@ export async function createLinkToken(): Promise<string> {
     user: { client_user_id: clientUserId() },
     client_name: "Finance Aggregator",
     // Transactions is required for every institution. Investments is pulled
-    // only where the institution supports it (e.g. Schwab), so credit-card-only
-    // banks (Chase/Capital One/Discover) don't fail with "no investment accounts"
-    // / "institution not supported".
+    // only where the institution supports it (brokerages), so credit-card-only
+    // institutions don't fail with "no investment accounts" / "not supported".
     products: [Products.Transactions],
     required_if_supported_products: [Products.Investments],
     // Request the maximum transaction history (default is only ~90 days).

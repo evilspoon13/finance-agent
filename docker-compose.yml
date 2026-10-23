@@ -1,3 +1,5 @@
+# Self-host everything on one machine: `docker compose up`, then open
+# http://localhost:3000. Migrations run on every start (no-op when current).
 services:
   postgres:
     image: postgres:16
@@ -8,7 +10,8 @@ services:
       POSTGRES_PASSWORD: finance
       POSTGRES_DB: finance
     ports:
-      # Host 5433 -> container 5432 to avoid clashing with a local Postgres on 5432.
+      # Host 5433 -> container 5432, for `npm run dev` on the host and to avoid
+      # clashing with a local Postgres on 5432.
       - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -18,39 +21,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: applies Drizzle migrations, then exits. The app waits for this to
-  # complete successfully before starting.
-  migrate:
-    build: .
-    env_file: .env
-    environment:
-      # Reach Postgres over the compose network (overrides the localhost value in .env).
-      DATABASE_URL: postgres://finance:finance@postgres:5432/finance
-    command: npm run db:migrate
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
-  # One-shot on startup: pull any transactions made while the app was offline.
-  # No-op on a fresh clone (no linked banks). Runs alongside the app rather than
-  # blocking it, so a slow/unreachable Plaid never holds up boot.
-  sync:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgres://finance:finance@postgres:5432/finance
-    command: npm run sync
-    volumes:
-      - .:/app
-      - /app/node_modules
-    depends_on:
-      postgres:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-    restart: "no"
-
   app:
     build: .
     container_name: finance-aggregator-app
@@ -59,49 +29,12 @@ services:
     environment:
       # Compose-network hostname overrides the localhost value in .env.
       DATABASE_URL: postgres://finance:finance@postgres:5432/finance
-      # AI_BASE_URL comes from .env: a cloud provider (e.g. Groq) works as-is.
-      # To use the bundled local Ollama instead, set AI_BASE_URL=http://ollama:11434/v1
-      # in .env and run `docker compose --profile ai up`.
+    command: sh -c "npm run db:migrate && npm start"
     ports:
       - "3000:3000"
-    volumes:
-      # Bind-mount source for hot reload (edit on host -> next dev recompiles).
-      # Anonymous volumes keep the image's node_modules and .next build cache,
-      # so host artifacts don't shadow them.
-      - .:/app
-      - /app/node_modules
-      - /app/.next
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-
-  # Optional local AI (Ollama). Enable with: docker compose --profile ai up
-  ollama:
-    image: ollama/ollama
-    container_name: finance-aggregator-ollama
-    profiles: ["ai"]
-    restart: unless-stopped
-    # No host port published: the app reaches it in-network at ollama:11434, and
-    # this avoids clashing with a native Ollama that may already own host :11434.
-    volumes:
-      - ollama:/root/.ollama
-
-  # One-shot: pulls the AI model into the ollama volume, then exits.
-  ollama-pull:
-    image: ollama/ollama
-    profiles: ["ai"]
-    depends_on:
-      - ollama
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-    entrypoint:
-      - sh
-      - -c
-      - 'until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull ${AI_MODEL:-qwen2.5-coder:7b}'
-    restart: "no"
 
 volumes:
   pgdata:
-  ollama:

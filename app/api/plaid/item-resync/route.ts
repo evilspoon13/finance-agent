@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getItemById, setItemStatusById } from "@/lib/db/queries";
-import { syncItemById } from "@/lib/plaid/sync";
-import { seedCards } from "@/lib/db/rewards-queries";
-import { recomputeAndPersist } from "@/lib/rewards/compute";
+import { syncOne } from "@/lib/plaid/sync";
 
 const bodySchema = z.object({ itemId: z.string().min(1) });
 
@@ -22,9 +20,7 @@ export async function POST(request: Request) {
     if (!item) return NextResponse.json({ error: "Unknown item" }, { status: 404 });
 
     await setItemStatusById(item.id, "good");
-    const result = await syncItemById(item.id);
-    await seedCards();
-    await recomputeAndPersist();
+    const result = await syncOne(item.id);
     return NextResponse.json({ ok: !result.error, result });
   } catch (err) {
     console.error("item-resync error:", err instanceof Error ? err.message : err);

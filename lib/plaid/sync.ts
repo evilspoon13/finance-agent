@@ -15,11 +15,20 @@ import {
   replaceHoldings,
   applyInvestmentTransactions,
 } from "@/lib/db/sync-queries";
+import { applyCategoryRules } from "@/lib/db/rules-queries";
+import { seedCards } from "@/lib/db/rewards-queries";
+import { recordNetWorthSnapshot } from "@/lib/db/net-worth-history";
+import { recomputeAndPersist } from "@/lib/rewards/compute";
+import { plaidEnv } from "@/lib/env";
 
 /**
  * Sync orchestration for a Plaid item: transactions (cursor-based, idempotent),
  * balances, and investment holdings. The per-item cursor is the source of truth;
  * re-running must never duplicate or drop data.
+ *
+ * Entry points: `syncAll()` (Sync button, daily cron, `npm run sync`) and
+ * `syncOne()` (webhook, re-link). Both end with `finishSync()`, the derived
+ * steps every sync needs.
  */
 
 export interface SyncResult {
@@ -35,32 +44,66 @@ export interface SyncResult {
 }
 
 /**
- * Items whose id starts with `manual_` are hand-entered (institutions Plaid
- * can't reach, e.g. Optum Bank HSA). They hold no real access token, so syncing
- * them would only throw; their balances are maintained by hand in SQL.
+ * Items whose id starts with `manual_` are hand-entered (accounts Plaid can't
+ * reach). They hold no real access token, so syncing them would only throw;
+ * their balances are edited on the Connections page.
  */
 export function isManualItem(item: { id: string }): boolean {
   return item.id.startsWith("manual_");
 }
 
-export async function syncAllItems(): Promise<SyncResult[]> {
-  const items = await getAllItems();
-  const results: SyncResult[] = [];
-  for (const item of items) {
-    if (isManualItem(item)) continue;
-    results.push(await syncItem(item));
-  }
+/** Derived steps after any sync: category rules, default cards, rewards, today's net worth. */
+export async function finishSync(): Promise<void> {
+  await applyCategoryRules();
+  await seedCards();
+  await recomputeAndPersist();
+  await recordNetWorthSnapshot();
+}
+
+/**
+ * Sync every Plaid item (in parallel — each is several slow Plaid round-trips
+ * and they share no rows), then finish.
+ */
+export async function syncAll(): Promise<SyncResult[]> {
+  const items = (await getAllItems()).filter((item) => !isManualItem(item));
+  const results = await Promise.all(
+    items.map(async (item) => {
+      await ensureWebhook(item);
+      return syncItem(item);
+    }),
+  );
+  await finishSync();
   return results;
 }
 
-export async function syncItemById(id: string): Promise<SyncResult> {
+/** Sync one item and finish (pass `finish: false` to run extra steps first). */
+export async function syncOne(id: string, { finish = true } = {}): Promise<SyncResult> {
   const item = await getItemById(id);
   if (!item) throw new Error(`No item ${id}`);
   if (isManualItem(item)) throw new Error(`Item ${id} is manual; nothing to sync`);
-  return syncItem(item);
+  const result = await syncItem(item);
+  if (finish && !result.error) await finishSync();
+  return result;
 }
 
-export async function syncItem(item: Item): Promise<SyncResult> {
+/**
+ * Point the item's Plaid webhook at PLAID_WEBHOOK_URL if it isn't already, so
+ * items linked under an older URL (or none) start receiving updates after the
+ * app moves. Best-effort: a failure here never blocks the sync.
+ */
+async function ensureWebhook(item: Item): Promise<void> {
+  try {
+    const url = plaidEnv().PLAID_WEBHOOK_URL;
+    if (!url) return;
+    const accessToken = decrypt(item.accessTokenEnc);
+    const { data } = await plaid().itemGet({ access_token: accessToken });
+    if (data.item.webhook !== url) await plaid().itemWebhookUpdate({ access_token: accessToken, webhook: url });
+  } catch (err) {
+    console.error(`webhook update for ${item.institutionName} failed:`, err instanceof Error ? err.message : err);
+  }
+}
+
+async function syncItem(item: Item): Promise<SyncResult> {
   const result: SyncResult = {
     itemId: item.id,
     institution: item.institutionName,

@@ -1,14 +1,15 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { z } from "zod";
 import { verifyWebhook } from "@/lib/plaid/webhook-verify";
 import { getItemByPlaidId, setItemStatusByPlaidId } from "@/lib/db/queries";
-import { syncItem } from "@/lib/plaid/sync";
+import { syncOne } from "@/lib/plaid/sync";
 
 /**
  * POST /api/plaid/webhook
  *
  * Verifies the Plaid webhook JWT BEFORE acting on the payload, then:
- *  - SYNC_UPDATES_AVAILABLE (TRANSACTIONS): trigger a sync for that item.
+ *  - SYNC_UPDATES_AVAILABLE (TRANSACTIONS): sync that item — after responding,
+ *    so Plaid gets its 200 right away instead of waiting on the whole sync.
  *  - ITEM_LOGIN_REQUIRED (ITEM): mark the item login_required.
  */
 
@@ -39,7 +40,12 @@ export async function POST(request: Request) {
   try {
     if (webhook_type === "TRANSACTIONS" && webhook_code === "SYNC_UPDATES_AVAILABLE" && item_id) {
       const item = await getItemByPlaidId(item_id);
-      if (item) await syncItem(item);
+      if (item) {
+        after(async () => {
+          const result = await syncOne(item.id);
+          if (result.error) console.error(`webhook sync ${item.institutionName}: ${result.error}`);
+        });
+      }
     } else if (
       webhook_type === "ITEM" &&
       webhook_code === "ITEM_LOGIN_REQUIRED" &&

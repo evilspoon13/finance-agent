@@ -10,7 +10,7 @@ export default async function CardsPage() {
   return (
     <PageShell
       title="Cards"
-      subtitle="Your credit cards and their cashback rates — these power the rewards guidance. Syncing auto-adds any new card at 1%; set the real rates here."
+      subtitle="Your credit cards and their reward rates — these power the rewards guidance. Syncing adds any new card at 1%; set the real rates here. For points or miles, enter the cash value you put on a point (e.g. 1.3% for 1x at 1.3¢)."
     >
       <CardManager cards={cards} accounts={accounts} categories={REWARD_CATEGORIES} />
     </PageShell>

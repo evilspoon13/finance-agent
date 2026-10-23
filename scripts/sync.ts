@@ -1,15 +1,12 @@
 /**
- * Manual sync runner (no server required).
+ * Sync every linked item from the command line (no server required).
  * Run: npm run sync
  */
 import "dotenv/config";
-import { syncAllItems } from "@/lib/plaid/sync";
-import { seedCards } from "@/lib/db/rewards-queries";
-import { recomputeAndPersist } from "@/lib/rewards/compute";
-import { recordNetWorthSnapshot } from "@/lib/db/net-worth-history";
+import { syncAll } from "@/lib/plaid/sync";
 
 async function main() {
-  const results = await syncAllItems();
+  const results = await syncAll();
   for (const r of results) {
     const status = r.error ? `ERROR: ${r.error}` : "ok";
     console.log(
@@ -17,11 +14,6 @@ async function main() {
         `accounts=${r.accounts} holdings=${r.holdings} invTxns=${r.investmentTxns} [${status}]`,
     );
   }
-  await seedCards();
-  const { updated } = await recomputeAndPersist();
-  console.log(`Rewards: computed optimal card + delta for ${updated} purchases.`);
-  const snapshot = await recordNetWorthSnapshot();
-  console.log(`Net worth snapshot ${snapshot.day}: ${(snapshot.netWorthCents / 100).toFixed(2)}`);
   process.exit(results.some((r) => r.error) ? 1 : 0);
 }
 

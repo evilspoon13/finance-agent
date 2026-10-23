@@ -81,7 +81,7 @@ export async function applyUpserts(rows: PlaidTransaction[]): Promise<number> {
           authorizedAt: row.authorizedAt,
           postedAt: row.postedAt,
           updatedAt: new Date(),
-          // optimal_card_id / reward_delta_cents are computed in Phase 4.
+          // optimal_card_id / reward_delta_cents are filled in by the rewards pass.
         },
       });
   }

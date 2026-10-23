@@ -1,11 +1,10 @@
 import { z } from "zod";
 
 /**
- * Centralized, validated access to environment variables.
- *
- * Core vars (DATABASE_URL, TOKEN_ENC_KEY) are required for the app to boot.
- * Plaid vars are validated lazily via `plaidEnv()` so the dashboard shell and
- * unit tests can run without real Plaid credentials.
+ * Centralized, validated access to environment variables, in three groups so
+ * each part of the app only demands what it uses: core (DB + token key),
+ * Plaid, and auth. Validated lazily, so unit tests and `next build` don't need
+ * real credentials.
  */
 
 const coreSchema = z.object({
@@ -20,55 +19,48 @@ const coreSchema = z.object({
         return false;
       }
     }, "TOKEN_ENC_KEY must be a base64-encoded 32-byte key (openssl rand -base64 32)"),
-  APP_OWNER_NAME: z.string().default("Owner"),
-  // Local-first AI (Ollama by default; OpenAI-compatible endpoint). Kept free
-  // and on-device so transaction data never leaves the machine.
-  AI_BASE_URL: z.string().url().default("http://localhost:11434/v1"),
-  AI_MODEL: z.string().default("qwen2.5-coder:7b"),
-  AI_API_KEY: z.string().default("ollama"), // ignored by Ollama; required by the SDK
+  // Bearer token for /api/cron/sync (the scheduled daily sync). Unset = disabled.
+  CRON_SECRET: z.string().min(16).optional().or(z.literal("")),
 });
 
 const plaidSchema = z.object({
   PLAID_CLIENT_ID: z.string().min(1, "PLAID_CLIENT_ID is required"),
   PLAID_SECRET: z.string().min(1, "PLAID_SECRET is required"),
   PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  // Public URL of /api/plaid/webhook. Existing items are re-pointed here on sync.
   PLAID_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
-  // Registered OAuth redirect URI (required for production OAuth institutions
-  // like Chase/Capital One). Must exactly match a URI allowlisted in the Plaid
-  // dashboard, e.g. https://<tunnel>/connections.
+  // Registered OAuth redirect URI (required for OAuth institutions in
+  // production). Must exactly match a URI allowlisted in the Plaid dashboard,
+  // e.g. https://<your-app>/connections.
   PLAID_REDIRECT_URI: z.string().url().optional().or(z.literal("")),
+});
+
+const authSchema = z.object({
+  AUTH_USERNAME: z.string().min(1, "AUTH_USERNAME is required"),
+  AUTH_PASSWORD: z.string().min(12, "AUTH_PASSWORD must be at least 12 characters"),
+  // Signs session cookies. Rotating it signs everyone out.
+  AUTH_SECRET: z.string().min(32, "AUTH_SECRET must be at least 32 characters (openssl rand -base64 32)"),
 });
 
 export type CoreEnv = z.infer<typeof coreSchema>;
 export type PlaidEnv = z.infer<typeof plaidSchema>;
+export type AuthEnv = z.infer<typeof authSchema>;
 
-let _core: CoreEnv | null = null;
-let _plaid: PlaidEnv | null = null;
-
-export function env(): CoreEnv {
-  if (_core) return _core;
-  const parsed = coreSchema.safeParse(process.env);
-  if (!parsed.success) {
-    throw new Error(
-      `Invalid environment configuration:\n${parsed.error.issues
-        .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-        .join("\n")}`,
-    );
-  }
-  _core = parsed.data;
-  return _core;
+function loader<T extends z.ZodTypeAny>(schema: T, what: string): () => z.infer<T> {
+  let cached: z.infer<T> | null = null;
+  return () => {
+    if (cached) return cached;
+    const parsed = schema.safeParse(process.env);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid ${what}:\n${parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n")}`,
+      );
+    }
+    cached = parsed.data;
+    return cached;
+  };
 }
 
-export function plaidEnv(): PlaidEnv {
-  if (_plaid) return _plaid;
-  const parsed = plaidSchema.safeParse(process.env);
-  if (!parsed.success) {
-    throw new Error(
-      `Invalid Plaid configuration:\n${parsed.error.issues
-        .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-        .join("\n")}`,
-    );
-  }
-  _plaid = parsed.data;
-  return _plaid;
-}
+export const env = loader(coreSchema, "environment configuration");
+export const plaidEnv = loader(plaidSchema, "Plaid configuration");
+export const authEnv = loader(authSchema, "auth configuration");

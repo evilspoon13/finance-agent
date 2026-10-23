@@ -4,9 +4,7 @@ import { exchangePublicToken, newItemId } from "@/lib/plaid/link";
 import { fetchAccounts } from "@/lib/plaid/accounts";
 import { encrypt } from "@/lib/crypto";
 import { upsertItem, upsertAccounts } from "@/lib/db/queries";
-import { syncItemById } from "@/lib/plaid/sync";
-import { seedCards } from "@/lib/db/rewards-queries";
-import { recomputeAndPersist } from "@/lib/rewards/compute";
+import { syncOne, finishSync } from "@/lib/plaid/sync";
 import { supersedeDuplicateItems, type SupersededItem } from "@/lib/db/relink-queries";
 
 const bodySchema = z.object({ public_token: z.string().min(1) });
@@ -44,17 +42,16 @@ export async function POST(request: Request) {
     let syncError: string | null = null;
     let superseded: SupersededItem[] = [];
     try {
-      const result = await syncItemById(item.id);
+      const result = await syncOne(item.id, { finish: false });
       if (result.error) {
         syncError = result.error;
       } else {
         imported = result.added;
-        await seedCards();
         // Only after the new item holds its own history, so overrides have
         // twins to move onto: drop any older link this one replaces, or the
         // same cards get counted twice everywhere.
         superseded = await supersedeDuplicateItems(item.id);
-        await recomputeAndPersist();
+        await finishSync();
       }
     } catch (err) {
       syncError = err instanceof Error ? err.message : String(err);

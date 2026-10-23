@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 0.0.0.0 -p ${PORT:-3000}",
     "lint": "eslint",
     "format": "prettier --write .",
     "test": "vitest run",
@@ -14,7 +14,6 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:push": "drizzle-kit push",
-    "db:reset": "tsx scripts/reset-db.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
@@ -22,14 +21,12 @@
     "drizzle-orm": "^0.45.2",
     "jose": "^6.2.3",
     "next": "16.2.7",
-    "openai": "^6.41.0",
     "plaid": "^42.2.0",
     "postgres": "^3.4.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "react-markdown": "^10.1.0",
     "react-plaid-link": "^4.1.1",
-    "remark-gfm": "^4.0.1",
+    "tsx": "^4.22.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -42,7 +39,6 @@
     "eslint-config-next": "16.2.7",
     "prettier": "^3.8.3",
     "tailwindcss": "^4",
-    "tsx": "^4.22.4",
     "typescript": "^5",
     "vitest": "^4.1.8"
   }

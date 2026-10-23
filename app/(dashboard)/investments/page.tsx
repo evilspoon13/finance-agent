@@ -90,11 +90,11 @@ function HoldingsTable({ a }: { a: InvestmentAccount }) {
         <thead>
           <tr className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
             <th className="px-4 py-2 text-left font-semibold">Holding</th>
-            <th className="px-4 py-2 text-right font-semibold">Shares</th>
+            <th className="hidden px-4 py-2 text-right font-semibold sm:table-cell">Shares</th>
             <th className="px-4 py-2 text-right font-semibold">Value</th>
-            <th className="px-4 py-2 text-right font-semibold">Cost</th>
+            <th className="hidden px-4 py-2 text-right font-semibold sm:table-cell">Cost</th>
             <th className="px-4 py-2 text-right font-semibold">Gain / Loss</th>
-            <th className="px-4 py-2 text-right font-semibold">Allocation</th>
+            <th className="hidden px-4 py-2 text-right font-semibold sm:table-cell">Allocation</th>
           </tr>
         </thead>
         <tbody>
@@ -104,9 +104,9 @@ function HoldingsTable({ a }: { a: InvestmentAccount }) {
                 <div className="font-medium">{h.ticker ?? "—"}</div>
                 <div className="max-w-[16rem] truncate text-xs text-zinc-500">{h.name}</div>
               </td>
-              <td className="px-4 py-2 text-right tabular-nums">{fmtQty(h.quantity)}</td>
+              <td className="hidden px-4 py-2 text-right tabular-nums sm:table-cell">{fmtQty(h.quantity)}</td>
               <td className="px-4 py-2 text-right tabular-nums">{formatCents(h.valueCents)}</td>
-              <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+              <td className="hidden px-4 py-2 text-right tabular-nums text-zinc-500 sm:table-cell">
                 {h.costBasisCents != null ? formatCents(h.costBasisCents) : "—"}
               </td>
               <td className={`px-4 py-2 text-right tabular-nums ${gainColor(h.gainCents)}`}>
@@ -120,7 +120,7 @@ function HoldingsTable({ a }: { a: InvestmentAccount }) {
                   "—"
                 )}
               </td>
-              <td className="px-4 py-2">
+              <td className="hidden px-4 py-2 sm:table-cell">
                 <div className="flex items-center justify-end gap-2">
                   <span className="tabular-nums text-zinc-500">{h.pctOfPortfolio.toFixed(1)}%</span>
                   <div className="h-1.5 w-16 rounded-full bg-zinc-100 dark:bg-zinc-800">
@@ -160,9 +160,9 @@ function ActivityTable({ activity }: { activity: InvestmentActivity[] }) {
           <thead>
             <tr className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500 dark:bg-zinc-900">
               <th className="px-4 py-2 text-left font-semibold">Date</th>
-              <th className="px-4 py-2 text-left font-semibold">Type</th>
+              <th className="hidden px-4 py-2 text-left font-semibold sm:table-cell">Type</th>
               <th className="px-4 py-2 text-left font-semibold">Description</th>
-              <th className="px-4 py-2 text-right font-semibold">Shares</th>
+              <th className="hidden px-4 py-2 text-right font-semibold sm:table-cell">Shares</th>
               <th className="px-4 py-2 text-right font-semibold">Cash flow</th>
             </tr>
           </thead>
@@ -173,7 +173,7 @@ function ActivityTable({ activity }: { activity: InvestmentActivity[] }) {
               return (
                 <tr key={t.id} className="border-t border-zinc-100 dark:border-zinc-800">
                   <td className="px-4 py-2 whitespace-nowrap text-zinc-500">{fmtDate(t.postedAt)}</td>
-                  <td className="px-4 py-2">
+                  <td className="hidden px-4 py-2 sm:table-cell">
                     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${ACTIVITY_STYLE[t.type] ?? ACTIVITY_STYLE.buy}`}>
                       {activityLabel(t)}
                     </span>
@@ -182,7 +182,7 @@ function ActivityTable({ activity }: { activity: InvestmentActivity[] }) {
                     {t.ticker ? <span className="font-medium">{t.ticker} </span> : null}
                     <span className="text-zinc-500">{t.securityName ?? t.name}</span>
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums text-zinc-500">
+                  <td className="hidden px-4 py-2 text-right tabular-nums text-zinc-500 sm:table-cell">
                     {Number(t.quantity) ? fmtQty(t.quantity) : "—"}
                   </td>
                   <td className={`px-4 py-2 text-right tabular-nums ${cashFlow > 0 ? "text-green-700 dark:text-green-400" : ""}`}>

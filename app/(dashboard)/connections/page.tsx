@@ -1,6 +1,7 @@
 import { PageShell } from "@/components/PageShell";
 import { PlaidConnect, type ItemDTO } from "@/components/PlaidConnect";
 import { SyncButton } from "@/components/SyncButton";
+import { ManualAccountForm } from "@/components/ConnectionControls";
 import { listItemsWithAccounts } from "@/lib/db/queries";
 import { isManualItem } from "@/lib/plaid/sync";
 
@@ -29,6 +30,7 @@ export default async function ConnectionsPage() {
       <div className="space-y-6">
         {items.length > 0 ? <SyncButton /> : null}
         <PlaidConnect items={dto} />
+        <ManualAccountForm />
       </div>
     </PageShell>
   );

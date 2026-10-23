@@ -1,0 +1,29 @@
+# Fly.io deployment. `fly launch --no-deploy` will offer to rewrite `app` (the
+# name must be globally unique); see README "Deploy to Fly.io" for secrets.
+app = "finance-aggregator"
+primary_region = "ord"  # put the app next to your database
+
+[build]
+
+[deploy]
+  # Runs in a temporary machine before each release; a failure aborts the deploy.
+  release_command = "npm run db:migrate"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Sleep when idle; a request (or a Plaid webhook) wakes it in ~1s.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/login"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

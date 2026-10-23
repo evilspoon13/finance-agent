@@ -33,7 +33,7 @@ interface Row {
   tag?: string; // overrides the "No budget"/"Not budgetable" chip
   noTxnLink?: boolean; // synthetic rows (P2P) have no category-filtered txn view
   reviewHref?: string; // P2P card links to the categorize screen instead
-  amortized: AmortizedCharge[]; // lump premiums this month is only paying a share of
+  amortized: AmortizedCharge[]; // lump charges this month is only paying a share of
 }
 
 function firstParam(v: string | string[] | undefined): string | undefined {
@@ -211,7 +211,7 @@ export default async function BudgetsPage(props: {
           >
             ◀
           </Link>
-          <span className="min-w-[10rem] text-center text-base font-semibold">{monthLabel}</span>
+          <span className="min-w-[9rem] text-center text-base font-semibold">{monthLabel}</span>
           <Link
             href={navHref(next.y, next.m)}
             className={`rounded-full border px-3 py-1 text-sm ${
@@ -332,13 +332,13 @@ function CategoryCard({
     <li className="rounded-lg border border-zinc-200 dark:border-zinc-800">
       <details className="group">
         <summary className="flex cursor-pointer list-none flex-col gap-2 p-4">
-          <div className="flex items-center justify-between">
-            <span className="flex items-center gap-2 font-medium">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <span className="flex flex-wrap items-center gap-2 font-medium">
               <span className="text-zinc-400 transition-transform group-open:rotate-90">▶</span>
               {humanizeCategory(r.category)}
               {r.amortized.length > 0 ? (
                 <span className="rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-normal text-sky-700 dark:border-sky-900 dark:bg-sky-950/50 dark:text-sky-300">
-                  Premium spread monthly
+                  Spread monthly
                 </span>
               ) : null}
               {!hasBudget ? (
@@ -358,7 +358,7 @@ function CategoryCard({
               )}
             </span>
           </div>
-          <div className="ml-6 h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800">
+          <div className="ml-6 h-2 w-[calc(100%-1.5rem)] rounded-full bg-zinc-100 dark:bg-zinc-800">
             <div
               className={`h-2 rounded-full ${
                 over ? "bg-red-500" : hasBudget ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-300 dark:bg-zinc-700"
@@ -378,7 +378,7 @@ function CategoryCard({
                   <li key={`${a.merchant}-${a.postedAt?.toISOString() ?? ""}`}>
                     {a.merchant}: <span className="tabular-nums">{formatCents(a.windowCents)}</span> this month —
                     month {a.monthIndex} of {a.months} of a{" "}
-                    <span className="tabular-nums">{formatCents(a.totalCents)}</span> {a.months}-month premium
+                    <span className="tabular-nums">{formatCents(a.totalCents)}</span> charge spread over {a.months} months
                     {a.postedAt
                       ? ` paid ${a.postedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`
                       : ""}

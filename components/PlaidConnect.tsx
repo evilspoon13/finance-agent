@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePlaidLink, type PlaidLinkOnSuccess } from "react-plaid-link";
 import { formatCents } from "@/lib/money";
+import { RemoveItemButton, ManualBalance } from "./ConnectionControls";
 
 const STATE_KEY = "plaid_link_state";
 
@@ -19,7 +20,7 @@ export interface ItemDTO {
   id: string;
   institutionName: string;
   status: "good" | "login_required" | "error";
-  /** Hand-entered institution Plaid can't reach; balances are maintained by SQL. */
+  /** Hand-entered institution Plaid can't reach; its value is edited in the UI. */
   manual?: boolean;
   accounts: AccountDTO[];
 }
@@ -189,9 +190,9 @@ export function PlaidConnect({ items }: { items: ItemDTO[] }) {
         <ul className="space-y-4">
           {items.map((item) => (
             <li key={item.id} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="font-medium">{item.institutionName}</h3>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                       STATUS_STYLE[item.manual ? "manual" : item.status] ?? STATUS_STYLE.error
@@ -212,14 +213,15 @@ export function PlaidConnect({ items }: { items: ItemDTO[] }) {
                       Reconnect
                     </button>
                   )}
+                  <RemoveItemButton id={item.id} name={item.institutionName} />
                 </div>
               </div>
               <table className="mt-3 w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wide text-zinc-500">
                     <th className="py-1 font-medium">Account</th>
-                    <th className="py-1 font-medium">Type</th>
-                    <th className="py-1 font-medium">Mask</th>
+                    <th className="hidden py-1 font-medium sm:table-cell">Type</th>
+                    <th className="hidden py-1 font-medium sm:table-cell">Mask</th>
                     <th className="py-1 text-right font-medium">Balance</th>
                   </tr>
                 </thead>
@@ -227,13 +229,19 @@ export function PlaidConnect({ items }: { items: ItemDTO[] }) {
                   {item.accounts.map((a) => (
                     <tr key={a.id} className="border-t border-zinc-100 dark:border-zinc-800">
                       <td className="py-1.5">{a.name}</td>
-                      <td className="py-1.5 text-zinc-500">
+                      <td className="hidden py-1.5 text-zinc-500 sm:table-cell">
                         {a.type}
                         {a.subtype ? ` / ${a.subtype}` : ""}
                       </td>
-                      <td className="py-1.5 text-zinc-500">{a.mask ? `••${a.mask}` : "—"}</td>
+                      <td className="hidden py-1.5 text-zinc-500 sm:table-cell">{a.mask ? `••${a.mask}` : "—"}</td>
                       <td className="py-1.5 text-right tabular-nums">
-                        {a.currentBalanceCents === null ? "—" : formatCents(a.currentBalanceCents)}
+                        {item.manual ? (
+                          <ManualBalance accountId={a.id} balanceCents={a.currentBalanceCents} />
+                        ) : a.currentBalanceCents === null ? (
+                          "—"
+                        ) : (
+                          formatCents(a.currentBalanceCents)
+                        )}
                       </td>
                     </tr>
                   ))}

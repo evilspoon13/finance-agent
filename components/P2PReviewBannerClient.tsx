@@ -36,7 +36,7 @@ export function P2PReviewBannerClient({ count }: { count: number }) {
   if (dismissed) return null;
 
   return (
-    <div className="sticky top-20 z-10 flex justify-center px-4">
+    <div className="sticky top-[calc(0.5rem+env(safe-area-inset-top))] z-10 mt-2 flex justify-center px-4 sm:top-20">
       <div className="flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-full border border-amber-300/70 bg-amber-50/90 px-4 py-2 text-sm shadow-lg shadow-amber-900/5 backdrop-blur-md dark:border-amber-500/30 dark:bg-amber-950/70">
         <span className="text-amber-900 dark:text-amber-200">
           {count} app payment{count === 1 ? "" : "s"} need{count === 1 ? "s" : ""} a category
