@@ -14,6 +14,10 @@
  *     not spending. (Also matched structurally by OWN_BANK_MERCHANTS.)
  *  4. Assorted move-in charges Plaid mis-filed (a tenant screening fee booked
  *     as MEDICAL, a storage unit booked as a restaurant).
+ *  5. Group bills Cam fronted and got paid back for (2026-09-30): the charge
+ *     keeps its category but counts only Cam's share via `reimbursed_cents`,
+ *     and the friends' incoming Venmo/Zelle are tagged REIMBURSEMENT.
+ *  6. Rent paid a day or so early (2026-10-05): budgeted to the month it covers.
  *
  * Run: npx tsx scripts/tune-categories.ts
  */
@@ -21,7 +25,7 @@ import "dotenv/config";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { transactions } from "@/lib/db/schema";
-import { IGNORE_CATEGORY } from "@/lib/db/spend-sql";
+import { IGNORE_CATEGORY, REIMBURSEMENT_CATEGORY } from "@/lib/db/spend-sql";
 import { INSURANCE_CATEGORY } from "@/lib/category";
 
 /** July F&F charges → the August budget month (August lease start). */
@@ -54,6 +58,46 @@ const PREMIUM_TERMS: { merchant: string; months: number }[] = [
 
 /** Members Choice ↔ SoFi moves between Cam's own banks. */
 const OWN_BANK_TRANSFERS_MATCH = "MEMBERS CHOICE CREDIT UNION";
+
+/**
+ * Fronted group bills. Matched on name + amount + posted date rather than the
+ * Plaid ID so a re-link (which issues new transaction IDs) can be re-pinned by
+ * re-running this script. Each payback is matched the same way.
+ */
+const FRONTED_BILLS: {
+  name: string;
+  amountCents: number;
+  postedOn: string;
+  ownShareCents: number;
+  memo: string;
+  paybacks: { name: string; amountCents: number; postedOn: string }[];
+}[] = [
+  {
+    name: "LITTLE SAKANA",
+    amountCents: 43727,
+    postedOn: "2026-09-13",
+    ownShareCents: 5227,
+    memo: "Group dinner, fronted the bill; friends paid back $385.00",
+    paybacks: [
+      { name: "Zelle% from Skyler Lucero", amountCents: -5500, postedOn: "2026-09-11" },
+      { name: "Venmo", amountCents: -33000, postedOn: "2026-09-13" },
+    ],
+  },
+];
+
+/**
+ * Rent charges paid before the month they cover. Matched like FRONTED_BILLS
+ * (name + amount + date) so a re-link can be re-pinned. budget_month, not
+ * posted_at — sync rewrites posted_at every run.
+ */
+const RENT_PAID_EARLY: { amountCents: number; postedOn: string; budgetMonth: string; memo: string }[] = [
+  { amountCents: 213023, postedOn: "2026-09-30", budgetMonth: "2026-10-01", memo: "October rent (paid 2026-09-30)" },
+];
+
+/** Exact-day match on posted_at (stored UTC), tolerant of name prefixes. */
+function matchTxn(name: string, amountCents: number, postedOn: string) {
+  return sql`${transactions.name} ilike ${`%${name}%`} and ${transactions.amountCents} = ${amountCents} and ${transactions.postedAt}::date = ${postedOn}::date`;
+}
 
 async function main() {
   // 1. F&F Property → rent, in the August budget month.
@@ -99,10 +143,40 @@ async function main() {
       sql`${transactions.name} ilike '%Pss Pacific%' and ${transactions.pfcDetailed} = 'FOOD_AND_DRINK_RESTAURANT'`,
     );
 
+  // 6. Rent paid ahead: the 2026-09-30 F&F charge is October's rent.
+  for (const r of RENT_PAID_EARLY) {
+    const hit = await db
+      .update(transactions)
+      .set({ budgetMonth: r.budgetMonth, userMemo: r.memo })
+      .where(matchTxn("F and F Property", r.amountCents, r.postedOn))
+      .returning({ id: transactions.id });
+    if (hit.length !== 1) console.warn(`Rent ${r.postedOn}: matched ${hit.length} charges (expected 1)`);
+  }
+
+  // 5. Fronted group bills: count only Cam's share; tag the paybacks.
+  for (const bill of FRONTED_BILLS) {
+    const hit = await db
+      .update(transactions)
+      .set({ reimbursedCents: bill.amountCents - bill.ownShareCents, userMemo: bill.memo })
+      .where(matchTxn(bill.name, bill.amountCents, bill.postedOn))
+      .returning({ id: transactions.id });
+    if (hit.length !== 1) console.warn(`${bill.name}: matched ${hit.length} charges (expected 1)`);
+    for (const p of bill.paybacks) {
+      const got = await db
+        .update(transactions)
+        .set({ userCategory: REIMBURSEMENT_CATEGORY, userMemo: `Payback: ${bill.name.toLowerCase()}` })
+        .where(matchTxn(p.name, p.amountCents, p.postedOn))
+        .returning({ id: transactions.id });
+      if (got.length !== 1) console.warn(`${bill.name} payback ${p.name}: matched ${got.length} (expected 1)`);
+    }
+  }
+
   const [counted] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(transactions)
-    .where(sql`${transactions.userCategory} is not null or ${transactions.amortizeMonths} is not null`);
+    .where(
+      sql`${transactions.userCategory} is not null or ${transactions.amortizeMonths} is not null or ${transactions.reimbursedCents} is not null`,
+    );
   console.log(`Done. ${counted?.count ?? 0} transactions now carry a user override.`);
   process.exit(0);
 }

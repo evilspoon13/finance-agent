@@ -48,13 +48,17 @@ export interface BudgetProgress {
   daysRemaining: number;
 }
 
+// Months are calendar months in UTC, matching the /budgets page and the
+// amortized-slice math in spend-sql (monthIndex uses getUTCMonth). A local-time
+// window ends after UTC midnight on the 1st west of UTC, so it spilled into the
+// next month and double-counted amortized charges' slices.
 function startOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
 
 function daysRemainingInMonth(d: Date): number {
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-  return end - d.getDate();
+  const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  return end - d.getUTCDate();
 }
 
 export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]> {
@@ -62,7 +66,7 @@ export async function budgetProgress(now = new Date()): Promise<BudgetProgress[]
   if (all.length === 0) return [];
 
   const from = startOfMonth(now);
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
   const win = { from, to };
   // Spend per pfc_primary for the current month (purchases only). Amortized
   // charges contribute only this month's slice — see spend-sql.

@@ -93,6 +93,13 @@ export const transactions = pgTable(
     // cover — an August lease signed and paid in July. A user override, so
     // unlike posted_at (which sync rewrites from Plaid every run) it sticks.
     budgetMonth: date("budget_month"),
+    // How much of this charge other people paid back (null = none). For a bill
+    // the user fronted for a group — friends Venmo/Zelle their share — so the
+    // budget counts only the user's own share (amount_cents - reimbursed_cents).
+    // The incoming payments are tagged user_category = "REIMBURSEMENT" so the
+    // peer-to-peer net card doesn't subtract them a second time. A user
+    // override like the columns above: sync never writes it.
+    reimbursedCents: integer("reimbursed_cents"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

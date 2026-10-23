@@ -18,6 +18,14 @@ export const P2P_IN_DETAILED = "TRANSFER_IN_TRANSFER_IN_FROM_APPS";
 /** user_category value meaning "reviewed, but not spending — leave it out". */
 export const IGNORE_CATEGORY = "IGNORE";
 
+/**
+ * user_category value on an INCOMING payment meaning "this is someone paying me
+ * back for a bill I fronted". The charge itself carries the offset in
+ * `reimbursed_cents`; tagging the inflow keeps it out of the peer-to-peer net
+ * (which would otherwise subtract it a second time).
+ */
+export const REIMBURSEMENT_CATEGORY = "REIMBURSEMENT";
+
 /** Money-movement categories that are never consumption on their own. */
 export const NON_SPEND_PRIMARY = ["TRANSFER_IN", "TRANSFER_OUT"];
 /** Detailed codes dropped even inside a spend primary (card payments). */
@@ -39,9 +47,20 @@ export const OWN_BANK_MERCHANTS = ["MEMBERS CHOICE CREDIT UNION"];
 // different positions would not match ("must appear in the GROUP BY clause").
 // IGNORE_CATEGORY is a compile-time constant, so there's no injection risk.
 const IGNORE_LITERAL = sql.raw(`'${IGNORE_CATEGORY}'`);
+const REIMBURSEMENT_LITERAL = sql.raw(`'${REIMBURSEMENT_CATEGORY}'`);
 
 /** True when the user has tagged a P2P payment with a real budget category. */
-export const isCategorizedP2P: SQL = sql`(${transactions.userCategory} is not null and ${transactions.userCategory} <> ${IGNORE_LITERAL})`;
+export const isCategorizedP2P: SQL = sql`(${transactions.userCategory} is not null and ${transactions.userCategory} not in (${IGNORE_LITERAL}, ${REIMBURSEMENT_LITERAL}))`;
+
+/** An incoming payment the user tagged as paying them back (see REIMBURSEMENT_CATEGORY). */
+export const isReimbursement: SQL = sql`coalesce(${transactions.userCategory}, '') = ${REIMBURSEMENT_LITERAL}`;
+
+/**
+ * The user's own share of a row: the charge minus what others paid back. This
+ * is what budgets count; rewards still use the full amount_cents (the card
+ * earned on the whole bill).
+ */
+export const netAmountCents: SQL<number> = sql<number>`(${transactions.amountCents} - coalesce(${transactions.reimbursedCents}, 0))`;
 
 /**
  * The category a transaction counts under: a user-assigned P2P category wins,
@@ -132,7 +151,8 @@ function sliceBounds(w: Window): { kStart: SQL; kEnd: SQL } {
 }
 
 /**
- * The amount of a row attributable to `w`. Normal rows contribute in full (the
+ * The amount of a row attributable to `w`, net of any reimbursement (see
+ * netAmountCents). Normal rows contribute in full (the
  * caller's date filter already decided they're in range); amortized rows
  * contribute only the slices covering the window. Exact by construction:
  * floor(amt*(kEnd+1)/N) - floor(amt*kStart/N) always re-sums to the charge.
@@ -140,7 +160,7 @@ function sliceBounds(w: Window): { kStart: SQL; kEnd: SQL } {
 export function windowAmountCents(w: Window = {}): SQL<number> {
   const { kStart, kEnd } = sliceBounds(w);
   const months = transactions.amortizeMonths;
-  const amt = transactions.amountCents;
+  const amt = netAmountCents;
   return sql<number>`(case
     when ${months} is null or ${months} <= 1 then ${amt}
     when ${kEnd} < ${kStart} then 0

@@ -18,6 +18,8 @@ import {
   inWindow,
   isOwnBankTransfer,
   isIgnored,
+  isReimbursement,
+  netAmountCents,
   cashPaidInWindow,
   budgetAt,
 } from "./spend-sql";
@@ -861,6 +863,8 @@ export interface ExcludedSummary {
   ccPaymentsCents: number; // credit-card payments (purchases already counted on the card)
   inflowsCents: number; // money in (income, refunds, deposits), excluding P2P reimbursements
   ignoredCents: number; // rows the user marked "not spending" (IGNORE)
+  reimbursedCents: number; // others' share of bills the user fronted (paid out, not the user's spend)
+  reimbursementsInCents: number; // incoming payments tagged REIMBURSEMENT (<= 0)
   /**
    * Cash that left this window for charges budgeted to a different month, MINUS
    * what other months' charges put on this one. Covers premiums spread across
@@ -880,7 +884,10 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
     .select({
       internal: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcPrimary}, '') in ('TRANSFER_OUT', 'TRANSFER_IN') and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_OUT_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
       cc: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and coalesce(${transactions.pfcDetailed}, '') = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' then ${transactions.amountCents} else 0 end), 0)::int`,
-      inflow: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_IN_DETAILED} then ${transactions.amountCents} else 0 end), 0)::int`,
+      inflow: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 and coalesce(${transactions.pfcDetailed}, '') <> ${P2P_IN_DETAILED} and not ${isReimbursement} then ${transactions.amountCents} else 0 end), 0)::int`,
+      // Paybacks for fronted bills: their own bucket, out of P2P and out of
+      // ordinary inflows (peerToPeerNet skips tagged rows).
+      reimbIn: sql<number>`coalesce(sum(case when ${transactions.amountCents} < 0 and ${isReimbursement} then ${transactions.amountCents} else 0 end), 0)::int`,
       // Own-bank moves land here too: Plaid files them as LOAN_PAYMENTS, but the
       // user confirmed they're transfers between their own banks.
       own: sql<number>`coalesce(sum(case when ${transactions.amountCents} > 0 and ${isOwnBankTransfer} then ${transactions.amountCents} else 0 end), 0)::int`,
@@ -888,6 +895,23 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
     })
     .from(transactions)
     .where(where);
+
+  // The share of fronted bills others covered. Cash that left this window but
+  // isn't the user's spend. Counted when the cash left; the deferred query
+  // below works on net amounts, so the two never overlap.
+  const [reimb] = await db
+    .select({
+      cents: sql<number>`coalesce(sum(${transactions.reimbursedCents}), 0)::int`,
+    })
+    .from(transactions)
+    .where(
+      and(
+        where,
+        sql`${transactions.reimbursedCents} is not null`,
+        sql`${transactions.amountCents} > 0`,
+        spendRowPredicate(),
+      ),
+    );
 
   // Money that left the account in one month but is budgeted to another, so the
   // footer still adds up to 100%. `paid` is cash that actually left in this
@@ -898,7 +922,7 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
 
   const [amort] = await db
     .select({
-      paid: sql<number>`coalesce(sum(case when ${paidHere} then ${transactions.amountCents} else 0 end), 0)::int`,
+      paid: sql<number>`coalesce(sum(case when ${paidHere} then ${netAmountCents} else 0 end), 0)::int`,
       // Gated on inWindow: a non-amortized row contributes its full amount from
       // windowAmountCents (callers normally apply the date filter separately),
       // and this query deliberately scans every shifted row, not just this
@@ -921,6 +945,8 @@ export async function excludedSummary(f: SpendingFilter = {}): Promise<ExcludedS
     ccPaymentsCents: row?.cc ?? 0,
     inflowsCents: row?.inflow ?? 0,
     ignoredCents: row?.ignored ?? 0,
+    reimbursedCents: reimb?.cents ?? 0,
+    reimbursementsInCents: row?.reimbIn ?? 0,
     deferredCents: (amort?.paid ?? 0) - (amort?.charged ?? 0),
   };
 }
