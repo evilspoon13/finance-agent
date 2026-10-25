@@ -5,6 +5,7 @@ import { dollarsToCents } from "@/lib/money";
 import {
   getAllItems,
   getItemById,
+  setItemStatusById,
   updateItemCursor,
   upsertAccounts,
 } from "@/lib/db/queries";
@@ -126,6 +127,11 @@ async function syncItem(item: Item): Promise<SyncResult> {
     result.investmentTxns = await refreshInvestmentTransactions(accessToken);
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
+    // Flag the item so Connections offers Reconnect. The webhook usually does
+    // this, but it can be missed (e.g. while the item pointed at an old URL).
+    if (plaidErrorCode(err) === "ITEM_LOGIN_REQUIRED" && item.status !== "login_required") {
+      await setItemStatusById(item.id, "login_required");
+    }
   }
   return result;
 }
@@ -234,10 +240,13 @@ async function refreshInvestmentTransactions(accessToken: string): Promise<numbe
   return written;
 }
 
+function plaidErrorCode(err: unknown): string | undefined {
+  return (err as { response?: { data?: { error_code?: string } } })?.response?.data?.error_code;
+}
+
 /** True for items that legitimately have no investment data to pull. */
 function isSkippableInvestmentError(err: unknown): boolean {
-  const code = (err as { response?: { data?: { error_code?: string } } })?.response?.data
-    ?.error_code;
+  const code = plaidErrorCode(err);
   return (
     code === "PRODUCTS_NOT_SUPPORTED" ||
     code === "NO_INVESTMENT_ACCOUNTS" ||
