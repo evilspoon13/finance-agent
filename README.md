@@ -37,7 +37,6 @@ Copy `.env.example` to `.env` and fill it in:
 | `CRON_SECRET`           | no       | Enables `POST /api/cron/sync` for a scheduled daily sync                  |
 | `AGENT_TOKEN`           | no       | Enables the finance agent's `/api/agent/*` endpoints (bearer token)       |
 | `DATABASE_URL_READONLY` | no       | Direct URL for a read-only role, used by the agent's query endpoint       |
-| `DISCORD_WEBHOOK_URL`   | no       | Discord channel webhook for the agent's alerts                            |
 
 Keep `TOKEN_ENC_KEY` with your data: a database restored under a different key can't
 decrypt its Plaid tokens, and every institution would need re-linking.
@@ -105,8 +104,8 @@ from where the old database left off.
 
 A Claude Code scheduled task can check in on your finances: your savings rate, where the
 money went, progress toward financial independence, idle cash and contribution pacing. It digs
-into anything unusual through a read-only SQL endpoint and posts a briefing to Discord with a
-link back to the conversation, where you can reply. It keeps notes and follow-ups between runs,
+into anything unusual through a read-only SQL endpoint and saves a briefing with a link back to
+the conversation, where you can reply. It keeps notes and follow-ups between runs,
 so what you tell it sticks. Its instructions live in [`docs/agent.md`](docs/agent.md); briefings
 and follow-ups show up on the **Briefings** page, and your goals and its notes are edited in
 **Settings**.
@@ -122,8 +121,7 @@ and follow-ups show up on the **Briefings** page, and your goals and its notes a
    alter default privileges in schema public grant select on tables to agent_ro;
    ```
 
-2. Set `AGENT_TOKEN`, `DATABASE_URL_READONLY` (that role, on a **direct** connection) and
-   `DISCORD_WEBHOOK_URL` (Discord: channel settings → Integrations → Webhooks).
+2. Set `AGENT_TOKEN` and `DATABASE_URL_READONLY` (that role, on a **direct** connection).
 3. At [claude.ai/code](https://claude.ai/code), create a cloud environment (the environment
    selector under the message box → **New environment**) with the variable
    `APP_URL=https://<your-app>` and a **network secret** of type Bearer for your app's host whose

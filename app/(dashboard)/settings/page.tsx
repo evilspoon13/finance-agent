@@ -11,7 +11,7 @@ const ruleCategoryLabel = (c: string) => (c === "IGNORE" ? "Not spending" : huma
 
 export default async function SettingsPage() {
   const [rules, goals, notes] = await Promise.all([listRules(), getContext(GOALS_KEY), getContext(NOTES_KEY)]);
-  const { AGENT_TOKEN, DATABASE_URL_READONLY, DISCORD_WEBHOOK_URL } = env();
+  const { AGENT_TOKEN, DATABASE_URL_READONLY } = env();
   const agentReady = Boolean(AGENT_TOKEN && DATABASE_URL_READONLY);
 
   return (
@@ -66,8 +66,7 @@ export default async function SettingsPage() {
           </button>
         </form>
         <p className="text-xs text-zinc-500">
-          Agent access: {agentReady ? "configured" : "not configured (set AGENT_TOKEN and DATABASE_URL_READONLY)"} ·
-          Discord: {DISCORD_WEBHOOK_URL ? "configured" : "not configured (set DISCORD_WEBHOOK_URL)"}
+          Agent access: {agentReady ? "configured" : "not configured (set AGENT_TOKEN and DATABASE_URL_READONLY)"}
         </p>
       </section>
 

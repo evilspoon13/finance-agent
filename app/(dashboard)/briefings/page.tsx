@@ -20,7 +20,7 @@ export default async function BriefingsPage() {
   return (
     <PageShell
       title="Briefings"
-      subtitle="Reports from your scheduled finance agent. Ones marked “sent” also went to Discord."
+      subtitle="Reports from your scheduled finance agent. Open one and continue in Claude to reply."
     >
       {actions.length > 0 ? (
         <section className="mb-8 space-y-3">
@@ -61,7 +61,7 @@ export default async function BriefingsPage() {
                       minute: "2-digit",
                       timeZone: "America/Los_Angeles",
                     })}
-                    {b.notified ? " · sent" : ""}
+                    {b.notified ? " · needs you" : ""}
                   </span>
                 </summary>
                 <div className="border-t border-zinc-100 px-4 py-4 dark:border-zinc-800">

@@ -230,7 +230,7 @@ export const agentContext = pgTable("agent_context", {
 
 /**
  * What the agent reported on each run. Its own history (so it doesn't repeat a
- * flag) and the /briefings page. `notified` = also sent to Discord.
+ * flag) and the /briefings page. `notified` = flagged as needing the user.
  */
 export const agentBriefings = pgTable(
   "agent_briefings",

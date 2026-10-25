@@ -25,7 +25,6 @@ const coreSchema = z.object({
   // endpoints answer 503 until AGENT_TOKEN and DATABASE_URL_READONLY are set.
   AGENT_TOKEN: z.string().min(32).optional().or(z.literal("")),
   DATABASE_URL_READONLY: z.string().optional(),
-  DISCORD_WEBHOOK_URL: z.string().url().optional().or(z.literal("")),
 });
 
 const plaidSchema = z.object({

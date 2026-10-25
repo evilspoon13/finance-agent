@@ -39,7 +39,7 @@ jq -nc '{title: "Lower the HSA payroll election", detail: "...", dueOn: "2026-12
 jq -nc '{status: "done", note: "Election changed (user, Dec 3)"}' |
   curl -s -X PATCH -H "content-type: application/json" -d @- "$APP_URL/api/agent/actions/<id>"
 
-# 5. Report: save exactly one briefing per run. notify=true also posts it to Discord.
+# 5. Report: save exactly one briefing per run. notify=true marks it as needing the user.
 SESSION_URL="https://claude.ai/code/${CLAUDE_CODE_REMOTE_SESSION_ID/#cse_/session_}"
 jq -nc --arg title "..." --rawfile body /tmp/briefing.md --arg url "$SESSION_URL" \
   '{kind: "daily", title: $title, body: $body, notify: false, sessionUrl: $url}' |
@@ -50,7 +50,8 @@ jq -nc --arg title "..." --rawfile body /tmp/briefing.md --arg url "$SESSION_URL
 `{ok:true, columns, rows, rowCount, truncated}` or `{ok:false, error}`; on an error, fix the
 SQL and retry. Always build JSON bodies with `jq`, not by hand-escaping. Pass `sessionUrl`
 (built from `CLAUDE_CODE_REMOTE_SESSION_ID` as above; omit it when that variable is unset)
-so the Discord message links back to this conversation, where the user replies.
+so the briefing links back to this conversation: the user opens it from the app's Briefings
+page and replies there.
 
 Your only writes are briefings, your notes and follow-ups. Never touch anything else.
 
@@ -162,6 +163,9 @@ yourself, apply the same rules (below) and say the number is your own query.
   cash is idle"). Numbers first, short sentences.
 - At most two new actions, each concrete, with an amount and a date ("move $5,000 from
   savings to the brokerage by Nov 30"). Open a follow-up for each one.
+- **Alerting:** when a briefing needs the user, set `notify: true` and, if your session has a
+  push-notification tool, also send a short push (the title plus one line). The app itself
+  sends nothing.
 - Daily runs: set `notify: true` only for something new and actionable or time-sensitive: a
   pay event (bonus, equity vest) to put to work, a broken connection, an unusual charge,
   a follow-up coming due, a deadline. Quiet days still get a short saved briefing with

@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { agentGuard } from "@/lib/agent/guard";
-import { env } from "@/lib/env";
 import { createBriefing } from "@/lib/db/agent-queries";
-import { formatDiscordMessage, postToDiscord } from "@/lib/notify/discord";
 
 const bodySchema = z.object({
   kind: z.enum(["daily", "weekly", "monthly", "adhoc"]),
@@ -13,10 +11,8 @@ const bodySchema = z.object({
   sessionUrl: z.string().url().startsWith("https://claude.ai/").optional(),
 });
 
-const FALLBACK_LINK = "https://claude.ai/code/routines";
-
-// POST /api/agent/briefings -> save the run's briefing; with notify, also post
-// it to Discord. The agent's only write, and only to agent_briefings.
+// POST /api/agent/briefings -> save the run's briefing. `notify` marks it as
+// needing the user (the agent alerts them itself, e.g. with a push notification).
 export async function POST(request: Request) {
   const denied = agentGuard(request);
   if (denied) return denied;
@@ -25,23 +21,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid briefing", issues: parsed.error.issues }, { status: 400 });
   }
   const b = parsed.data;
-
-  let notified = false;
-  const webhook = env().DISCORD_WEBHOOK_URL;
-  if (b.notify && webhook) {
-    notified = await postToDiscord(webhook, formatDiscordMessage(b.title, b.body, b.sessionUrl ?? FALLBACK_LINK));
-  }
   const id = await createBriefing({
     kind: b.kind,
     title: b.title,
     body: b.body,
-    notified,
+    notified: b.notify,
     sessionUrl: b.sessionUrl ?? null,
   });
-  return NextResponse.json({
-    ok: true,
-    id,
-    notified,
-    ...(b.notify && !webhook ? { warning: "DISCORD_WEBHOOK_URL is not set; saved without notifying" } : {}),
-  });
+  return NextResponse.json({ ok: true, id });
 }
