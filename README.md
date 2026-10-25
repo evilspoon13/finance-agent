@@ -103,10 +103,13 @@ from where the old database left off.
 
 ## Finance agent (optional)
 
-A Claude Code scheduled task can check in on your finances, dig into anything unusual through a
-read-only SQL endpoint, and post a briefing to Discord with a link back to the conversation. Its
-instructions live in [`docs/agent.md`](docs/agent.md); briefings show up on the **Briefings**
-page and your goals are edited in **Settings**.
+A Claude Code scheduled task can check in on your finances: your savings rate, where the
+money went, progress toward financial independence, idle cash and contribution pacing. It digs
+into anything unusual through a read-only SQL endpoint and posts a briefing to Discord with a
+link back to the conversation, where you can reply. It keeps notes and follow-ups between runs,
+so what you tell it sticks. Its instructions live in [`docs/agent.md`](docs/agent.md); briefings
+and follow-ups show up on the **Briefings** page, and your goals and its notes are edited in
+**Settings**.
 
 1. Create a read-only Postgres role. The agent must not read Plaid tokens:
 

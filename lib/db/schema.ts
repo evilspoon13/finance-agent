@@ -215,9 +215,12 @@ export const categoryRules = pgTable("category_rules", {
 });
 
 /**
- * Free-form context for the scheduled finance agent, keyed by name. Today one
- * row, "goals": a markdown doc of the user's goals and rules the agent measures
- * progress against. Kept in the DB so personal targets never live in the repo.
+ * Free-form context for the scheduled finance agent, keyed by name:
+ *  - "goals": the user's profile, goals and rules (user-edited, in Settings);
+ *  - "notes": the agent's own running memory across runs (facts the user told
+ *    it in a reply, decisions, things already explained). The agent rewrites it;
+ *    the user can edit it in Settings too.
+ * Kept in the DB so personal details never live in the repo.
  */
 export const agentContext = pgTable("agent_context", {
   key: text("key").primaryKey(),
@@ -233,7 +236,7 @@ export const agentBriefings = pgTable(
   "agent_briefings",
   {
     id: text("id").primaryKey(),
-    kind: text("kind").notNull(), // daily | weekly | adhoc
+    kind: text("kind").notNull(), // daily | weekly | monthly | adhoc
     title: text("title").notNull(),
     body: text("body").notNull(), // markdown
     notified: boolean("notified").notNull().default(false),
@@ -241,6 +244,28 @@ export const agentBriefings = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("agent_briefings_created_idx").on(t.createdAt)],
+);
+
+export const agentActionStatusEnum = pgEnum("agent_action_status", ["open", "done", "dismissed"]);
+
+/**
+ * Follow-ups the agent asked the user to do ("move $5k of idle cash to the
+ * brokerage by Nov 30"). Every run sees the open ones and checks on them; the
+ * user closes them on /briefings, or the agent does once it sees it happened.
+ */
+export const agentActions = pgTable(
+  "agent_actions",
+  {
+    id: text("id").primaryKey(),
+    title: text("title").notNull(),
+    detail: text("detail"),
+    dueOn: date("due_on"),
+    status: agentActionStatusEnum("status").notNull().default("open"),
+    note: text("note"), // how it was resolved, or why it was dismissed
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [index("agent_actions_status_idx").on(t.status)],
 );
 
 export type Item = typeof items.$inferSelect;
@@ -261,3 +286,4 @@ export type Budget = typeof budgets.$inferSelect;
 export type NewBudget = typeof budgets.$inferInsert;
 export type CategoryRule = typeof categoryRules.$inferSelect;
 export type AgentBriefing = typeof agentBriefings.$inferSelect;
+export type AgentAction = typeof agentActions.$inferSelect;

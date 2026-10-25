@@ -1,12 +1,15 @@
-import { and, desc, gte, sql } from "drizzle-orm";
+import { and, desc, gte, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
-import { investmentTransactions, transactions } from "@/lib/db/schema";
+import { investmentTransactions, items, transactions } from "@/lib/db/schema";
 import { getNetWorth, getInvestments, getIncomeSummary, spendingByCategory, countUncategorizedP2P } from "@/lib/db/analytics";
 import { getNetWorthHistory } from "@/lib/db/net-worth-history";
 import { budgetProgress } from "@/lib/db/budget-queries";
 import { effectiveCategory, spendRowPredicate } from "@/lib/db/spend-sql";
 import { analyzeRewards } from "@/lib/rewards/compute";
-import { getContext, listBriefings, GOALS_KEY } from "@/lib/db/agent-queries";
+import { getContext, listActions, listBriefings, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
+import { savingsForWindow, type WindowSavings } from "./savings";
+import { FI_MULTIPLE, REAL_RETURN, yearsToTarget } from "./fire";
+import { CONTRIBUTION_LIMITS } from "./limits";
 import { projectMonthEnd } from "./projection";
 
 /**
@@ -17,6 +20,22 @@ import { projectMonthEnd } from "./projection";
 
 const usd = (cents: number) => Math.round(cents) / 100;
 const DAY = 864e5;
+const STALE_SYNC_HOURS = 48;
+
+function savingsView(label: string, s: WindowSavings) {
+  return {
+    period: label,
+    incomeUsd: usd(s.incomeCents),
+    netPayUsd: usd(s.netPayCents),
+    otherIncomeUsd: usd(s.otherIncomeCents),
+    payrollRetirementUsd: usd(s.payrollRetirementCents),
+    spentUsd: usd(s.spentCents),
+    savedUsd: usd(s.savedCents),
+    savingsRatePct: s.savingsRatePct,
+    investedUsd: Object.fromEntries(Object.entries(s.investedCents).map(([k, v]) => [k, usd(v)])),
+    cashKeptUsd: usd(s.cashKeptCents),
+  };
+}
 
 function monthBounds(year: number, month: number) {
   return { from: new Date(Date.UTC(year, month, 1)), to: new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999)) };
@@ -30,8 +49,31 @@ export async function buildAgentSummary(now = new Date()) {
   const since90 = new Date(now.getTime() - 90 * DAY);
   const monthStart = new Date(Date.UTC(y, m, 1));
 
-  const [netWorth, history, investments, income, budgets, pastMonths, uncategorizedP2P, rewards, goals, briefings] =
-    await Promise.all([
+  const yearStart = new Date(Date.UTC(y, 0, 1));
+  const fullMonths = [1, 2, 3].map((back) => {
+    const d = new Date(Date.UTC(y, m - back, 1));
+    return { label: d.toISOString().slice(0, 7), ...monthBounds(d.getUTCFullYear(), d.getUTCMonth()) };
+  });
+
+  const [
+    netWorth,
+    history,
+    investments,
+    income,
+    budgets,
+    pastMonths,
+    uncategorizedP2P,
+    uncategorizedP2P30d,
+    rewards,
+    goals,
+    notes,
+    actions,
+    briefings,
+    savingsMtd,
+    savingsYtd,
+    savingsMonths,
+    staleItems,
+  ] = await Promise.all([
       getNetWorth(),
       getNetWorthHistory(400),
       getInvestments(),
@@ -49,9 +91,25 @@ export async function buildAgentSummary(now = new Date()) {
         }),
       ),
       countUncategorizedP2P(),
+      countUncategorizedP2P(since30),
       analyzeRewards({ from: since30, to: now }),
       getContext(GOALS_KEY),
+      getContext(NOTES_KEY),
+      listActions(),
       listBriefings(5),
+      savingsForWindow({ from: monthStart, to: now }),
+      savingsForWindow({ from: yearStart, to: now }),
+      Promise.all(fullMonths.map(async (w) => ({ label: w.label, s: await savingsForWindow(w) }))),
+      // Linked items that need a re-login or haven't synced lately.
+      db
+        .select({ institution: items.institutionName, status: items.status, lastSynced: items.updatedAt })
+        .from(items)
+        .where(
+          and(
+            sql`${items.id} not like 'manual\_%'`,
+            or(ne(items.status, "good"), lt(items.updatedAt, new Date(now.getTime() - STALE_SYNC_HOURS * 3600e3))),
+          ),
+        ),
     ]);
 
   // Net worth N days ago: the latest snapshot on or before that day.
@@ -112,9 +170,63 @@ export async function buildAgentSummary(now = new Date()) {
 
   const accountName = new Map(investments.accounts.map((a) => [a.accountId, a.name]));
 
+  // Run rates from the last full months that have income data (skips months
+  // before accounts were linked).
+  const observed = savingsMonths.filter((x) => x.s.incomeCents > 0);
+  const avg = (f: (s: WindowSavings) => number) =>
+    observed.length ? observed.reduce((t, x) => t + f(x.s), 0) / observed.length : 0;
+  const monthlySpendCents = avg((s) => s.spentCents);
+  const monthlySavedCents = avg((s) => s.savedCents);
+  const annualSpendCents = monthlySpendCents * 12;
+  const fiNumberCents = annualSpendCents * FI_MULTIPLE;
+  const investedCents = investments.totalValueCents;
+  const cashCents = netWorth.lines.filter((l) => l.klass === "cash").reduce((t, l) => t + l.valueCents, 0);
+  const years = yearsToTarget(investedCents, monthlySavedCents * 12, fiNumberCents);
+  const limits = CONTRIBUTION_LIMITS[y] ?? null;
+
   return {
     asOf: now.toISOString(),
     goals: goals ?? "(no goals set yet — they live in Settings → Goals)",
+    notes: notes ?? "(no notes yet — save what you learn with PUT /api/agent/notes)",
+    actions: actions.map((a) => ({
+      id: a.id,
+      title: a.title,
+      detail: a.detail,
+      dueOn: a.dueOn,
+      status: a.status,
+      note: a.note,
+      createdAt: a.createdAt.toISOString().slice(0, 10),
+      resolvedAt: a.resolvedAt?.toISOString().slice(0, 10) ?? null,
+    })),
+    savings: {
+      thisMonthSoFar: savingsView(monthStart.toISOString().slice(0, 7), savingsMtd),
+      lastFullMonths: savingsMonths.map((x) => savingsView(x.label, x.s)),
+      yearToDate: savingsView(String(y), savingsYtd),
+    },
+    fire: {
+      investedAssetsUsd: usd(investedCents),
+      monthlySpendingRunRateUsd: usd(monthlySpendCents),
+      monthlySavedRunRateUsd: usd(monthlySavedCents),
+      runRateMonths: observed.map((x) => x.label),
+      fiNumberAtCurrentSpendingUsd: usd(fiNumberCents),
+      progressPct: fiNumberCents > 0 ? Math.round((investedCents / fiNumberCents) * 1000) / 10 : null,
+      yearsToFI: years === null ? null : Math.round(years * 10) / 10,
+      assumptions: { fiMultiple: FI_MULTIPLE, realReturn: REAL_RETURN },
+    },
+    cash: {
+      totalUsd: usd(cashCents),
+      monthsOfSpending: monthlySpendCents > 0 ? Math.round((cashCents / monthlySpendCents) * 10) / 10 : null,
+    },
+    contributionsThisYear: {
+      year: y,
+      depositedUsd: Object.fromEntries(Object.entries(savingsYtd.investedCents).map(([k, v]) => [k, usd(v)])),
+      limitsUsd: limits,
+    },
+    connectionsNeedingAttention: staleItems.map((i) => ({
+      institution: i.institution,
+      status: i.status,
+      lastSynced: i.lastSynced.toISOString(),
+    })),
     netWorth: {
       netWorthUsd: usd(netWorth.netWorthCents),
       assetsUsd: usd(netWorth.assetsCents),
@@ -166,7 +278,7 @@ export async function buildAgentSummary(now = new Date()) {
     },
     spendingLastThreeMonths: pastMonths,
     watchList: {
-      uncategorizedP2PPayments: uncategorizedP2P,
+      uncategorizedP2PPayments: { allTime: uncategorizedP2P, last30d: uncategorizedP2P30d },
       missedRewards30d: {
         totalUsd: usd(rewards.totalMissedCents),
         top: rewards.missed.slice(0, 5).map((r) => ({

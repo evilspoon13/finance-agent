@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createRule, deleteRule } from "@/lib/db/rules-queries";
-import { setContext, GOALS_KEY } from "@/lib/db/agent-queries";
+import { setContext, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
 import { IGNORE_CATEGORY } from "@/lib/db/spend-sql";
 import { BUDGETABLE_CATEGORIES } from "@/lib/category";
 
@@ -37,5 +37,13 @@ export async function saveGoalsAction(formData: FormData): Promise<void> {
   const goals = z.string().max(20_000).safeParse(formData.get("goals"));
   if (!goals.success) return;
   await setContext(GOALS_KEY, goals.data.trim());
+  revalidatePath("/settings");
+}
+
+/** Save the agent's running notes (it rewrites them too; this is for corrections). */
+export async function saveNotesAction(formData: FormData): Promise<void> {
+  const notes = z.string().max(20_000).safeParse(formData.get("notes"));
+  if (!notes.success) return;
+  await setContext(NOTES_KEY, notes.data.trim());
   revalidatePath("/settings");
 }

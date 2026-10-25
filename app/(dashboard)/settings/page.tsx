@@ -1,16 +1,16 @@
 import { PageShell } from "@/components/PageShell";
 import { listRules } from "@/lib/db/rules-queries";
 import { humanizeCategory, BUDGETABLE_CATEGORIES } from "@/lib/category";
-import { getContext, GOALS_KEY } from "@/lib/db/agent-queries";
+import { getContext, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
 import { env } from "@/lib/env";
-import { createRuleAction, deleteRuleAction, saveGoalsAction } from "./actions";
+import { createRuleAction, deleteRuleAction, saveGoalsAction, saveNotesAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 const ruleCategoryLabel = (c: string) => (c === "IGNORE" ? "Not spending" : humanizeCategory(c));
 
 export default async function SettingsPage() {
-  const [rules, goals] = await Promise.all([listRules(), getContext(GOALS_KEY)]);
+  const [rules, goals, notes] = await Promise.all([listRules(), getContext(GOALS_KEY), getContext(NOTES_KEY)]);
   const { AGENT_TOKEN, DATABASE_URL_READONLY, DISCORD_WEBHOOK_URL } = env();
   const agentReady = Boolean(AGENT_TOKEN && DATABASE_URL_READONLY);
 
@@ -31,7 +31,7 @@ export default async function SettingsPage() {
         <form action={saveGoalsAction} className="space-y-2">
           <textarea
             name="goals"
-            rows={10}
+            rows={16}
             defaultValue={goals ?? ""}
             placeholder={"- Save 30% of gross pay\n- Max the Roth IRA by April\n- Keep 6 months of expenses in cash"}
             className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 font-mono text-base sm:text-sm dark:border-zinc-700"
@@ -41,6 +41,28 @@ export default async function SettingsPage() {
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
           >
             Save goals
+          </button>
+        </form>
+        <div className="pt-4">
+          <h3 className="text-sm font-semibold">Agent notes</h3>
+          <p className="text-sm text-zinc-500">
+            The agent&apos;s memory between runs: what you&apos;ve told it in replies and what it has already
+            explained. It keeps these up to date; edit them to correct something.
+          </p>
+        </div>
+        <form action={saveNotesAction} className="space-y-2">
+          <textarea
+            name="notes"
+            rows={8}
+            defaultValue={notes ?? ""}
+            placeholder="Empty until the agent's first run."
+            className="w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 font-mono text-base sm:text-sm dark:border-zinc-700"
+          />
+          <button
+            type="submit"
+            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
+          >
+            Save notes
           </button>
         </form>
         <p className="text-xs text-zinc-500">

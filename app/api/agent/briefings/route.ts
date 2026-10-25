@@ -6,7 +6,7 @@ import { createBriefing } from "@/lib/db/agent-queries";
 import { formatDiscordMessage, postToDiscord } from "@/lib/notify/discord";
 
 const bodySchema = z.object({
-  kind: z.enum(["daily", "weekly", "adhoc"]),
+  kind: z.enum(["daily", "weekly", "monthly", "adhoc"]),
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(20_000),
   notify: z.boolean().default(false),

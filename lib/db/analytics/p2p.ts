@@ -102,7 +102,7 @@ export async function listUncategorizedP2P(limit = 100): Promise<UncategorizedP2
 }
 
 /** How many outgoing P2P payments still need a category (drives the banner). */
-export async function countUncategorizedP2P(): Promise<number> {
+export async function countUncategorizedP2P(since?: Date): Promise<number> {
   const [row] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(transactions)
@@ -112,6 +112,7 @@ export async function countUncategorizedP2P(): Promise<number> {
         eq(transactions.pending, false),
         sql`${transactions.amountCents} > 0`,
         sql`${transactions.userCategory} is null`,
+        since ? gte(transactions.postedAt, since) : undefined,
       ),
     );
   return row?.n ?? 0;
