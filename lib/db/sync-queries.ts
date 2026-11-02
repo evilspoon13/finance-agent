@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, or } from "drizzle-orm";
 import type {
   Transaction as PlaidTransaction,
   Holding as PlaidHolding,
@@ -15,6 +15,7 @@ import {
   type NewInvestmentTransaction,
 } from "./schema";
 import { dollarsToCents } from "@/lib/money";
+import { carryOverrides, findPostedTwin } from "./override-queries";
 
 /**
  * Sync write helpers: idempotent transaction upserts/deletes, the
@@ -52,16 +53,12 @@ function mapTransaction(t: PlaidTransaction): NewTransaction {
 /**
  * Apply `added` + `modified` transactions as upserts keyed on transaction_id.
  * When a posted transaction carries a pending_transaction_id, delete the stale
- * pending placeholder so a purchase is never double-counted.
+ * pending placeholder so a purchase is never double-counted, after copying the
+ * user's edits on it (category, budget month, ...) onto the posted row.
  */
 export async function applyUpserts(rows: PlaidTransaction[]): Promise<number> {
   for (const t of rows) {
     const row = mapTransaction(t);
-
-    // Pending->posted replacement: a posted txn replaces its pending row.
-    if (!t.pending && t.pending_transaction_id) {
-      await db.delete(transactions).where(eq(transactions.id, t.pending_transaction_id));
-    }
 
     await db
       .insert(transactions)
@@ -84,13 +81,38 @@ export async function applyUpserts(rows: PlaidTransaction[]): Promise<number> {
           // optimal_card_id / reward_delta_cents are filled in by the rewards pass.
         },
       });
+
+    // Pending->posted replacement: a posted txn replaces its pending row.
+    if (!t.pending && t.pending_transaction_id) {
+      await carryOverrides(t.pending_transaction_id, row.id);
+      await db.delete(transactions).where(eq(transactions.id, t.pending_transaction_id));
+    }
   }
   return rows.length;
 }
 
-/** Apply `removed` transactions (delete by transaction_id). */
+/**
+ * Apply `removed` transactions (delete by transaction_id). Banks that don't link
+ * pending and posted rows just remove the pending one, so first move any edits
+ * the user made on a removed pending row to its posted twin.
+ */
 export async function applyRemovals(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
+  const t = transactions;
+  const edited = await db
+    .select({ id: t.id, accountId: t.accountId, amountCents: t.amountCents, postedAt: t.postedAt })
+    .from(t)
+    .where(
+      and(
+        inArray(t.id, ids),
+        eq(t.pending, true),
+        or(isNotNull(t.userCategory), isNotNull(t.userMemo), isNotNull(t.budgetMonth), isNotNull(t.amortizeMonths), isNotNull(t.reimbursedCents)),
+      ),
+    );
+  for (const p of edited) {
+    const twin = await findPostedTwin(p);
+    if (twin && !ids.includes(twin)) await carryOverrides(p.id, twin);
+  }
   await db.delete(transactions).where(inArray(transactions.id, ids));
   return ids.length;
 }
