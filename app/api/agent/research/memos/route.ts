@@ -8,7 +8,7 @@ const bodySchema = z.object({
   title: z.string().trim().min(1).max(200),
   body: z.string().trim().min(1).max(60_000),
   sources: z
-    .array(z.object({ title: z.string().max(300), url: z.url().max(1_000), date: z.string().max(30).optional() }))
+    .array(z.object({ title: z.string().max(300), url: z.url({ protocol: /^https?$/ }).max(1_000), date: z.string().max(30).optional() }))
     .max(200)
     .default([]),
   sessionUrl: z.string().url().startsWith("https://claude.ai/").optional(),

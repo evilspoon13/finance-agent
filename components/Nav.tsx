@@ -12,6 +12,7 @@ const LINKS = [
   { href: "/budgets", label: "Budgets" },
   { href: "/rewards", label: "Rewards" },
   { href: "/briefings", label: "Briefings" },
+  { href: "/knowledge", label: "Knowledge" },
   { href: "/cards", label: "Cards" },
   { href: "/connections", label: "Connections" },
   { href: "/settings", label: "Settings" },

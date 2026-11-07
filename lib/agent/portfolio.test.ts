@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { profileSchema } from "./profile";
-import { checkProposal, portfolioView, scoreProposal, washSaleRisks, type Position } from "./portfolio";
+import { checkProposal, portfolioView, positionsOf, recentBuysOf, scoreProposal, washSaleRisks, type Position } from "./portfolio";
 
 const rules = profileSchema.parse({
   stocks: { coreTickers: ["VOO", "VXUS"], excludedTickers: ["QCOM"], higherBarSectors: ["semiconductors"] },
@@ -54,6 +54,29 @@ describe("checkProposal", () => {
   it("warns about wash sales", () => {
     const r = checkProposal({ ticker: "VOO", action: "sell", amountCents: 100_00 }, view, rules, ["VOO"]);
     expect(r.warnings[0]).toContain("wash sale");
+  });
+});
+
+describe("positionsOf", () => {
+  it("counts a balance-only account, like a hand-entered HSA", () => {
+    const held = { ticker: "VOO", valueCents: 100, costBasisCents: 90 };
+    const positions = positionsOf([
+      { kind: "taxable", valueCents: 100, holdings: [held], activity: [] },
+      { kind: "hsa", valueCents: 500, holdings: [], activity: [] },
+    ]);
+    expect(portfolioView(positions, rules).totalCents).toBe(600);
+  });
+});
+
+describe("recentBuysOf", () => {
+  it("keeps only buys inside the 30-day window", () => {
+    const now = new Date("2026-11-06T00:00:00Z");
+    const activity = [
+      { type: "buy", ticker: "VOO", postedAt: new Date("2026-10-20T00:00:00Z") },
+      { type: "buy", ticker: "VXUS", postedAt: new Date("2026-09-01T00:00:00Z") },
+      { type: "cash", ticker: null, postedAt: new Date("2026-11-01T00:00:00Z") },
+    ];
+    expect(recentBuysOf([{ kind: "roth", valueCents: 0, holdings: [], activity }], now)).toEqual([{ ticker: "VOO", date: "2026-10-20" }]);
   });
 });
 

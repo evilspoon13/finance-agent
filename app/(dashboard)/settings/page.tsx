@@ -2,15 +2,22 @@ import { PageShell } from "@/components/PageShell";
 import { listRules } from "@/lib/db/rules-queries";
 import { humanizeCategory, BUDGETABLE_CATEGORIES } from "@/lib/category";
 import { getContext, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
+import { parseProfile, PROFILE_KEY } from "@/lib/agent/profile";
 import { env } from "@/lib/env";
 import { createRuleAction, deleteRuleAction, saveGoalsAction, saveNotesAction } from "./actions";
+import { ProfileForm } from "./ProfileForm";
 
 export const dynamic = "force-dynamic";
 
 const ruleCategoryLabel = (c: string) => (c === "IGNORE" ? "Not spending" : humanizeCategory(c));
 
 export default async function SettingsPage() {
-  const [rules, goals, notes] = await Promise.all([listRules(), getContext(GOALS_KEY), getContext(NOTES_KEY)]);
+  const [rules, goals, notes, profile] = await Promise.all([
+    listRules(),
+    getContext(GOALS_KEY),
+    getContext(NOTES_KEY),
+    getContext(PROFILE_KEY),
+  ]);
   const { AGENT_TOKEN, DATABASE_URL_READONLY } = env();
   const agentReady = Boolean(AGENT_TOKEN && DATABASE_URL_READONLY);
 
@@ -65,6 +72,14 @@ export default async function SettingsPage() {
             Save notes
           </button>
         </form>
+        <div className="pt-4">
+          <h3 className="text-sm font-semibold">Agent profile</h3>
+          <p className="text-sm text-zinc-500">
+            Numbers the accounts can&apos;t show, and the limits on investing proposals (JSON). The app uses these for
+            gross savings rate, FI projections, cash warnings and refusing proposals that break your rules.
+          </p>
+        </div>
+        <ProfileForm initial={JSON.stringify(parseProfile(profile), null, 2)} />
         <p className="text-xs text-zinc-500">
           Agent access: {agentReady ? "configured" : "not configured (set AGENT_TOKEN and DATABASE_URL_READONLY)"}
         </p>

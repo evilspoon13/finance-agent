@@ -19,6 +19,37 @@ export interface RecentBuy {
   date: string;
 }
 
+const DAY = 864e5;
+const WASH_SALE_DAYS = 30;
+
+interface AccountView {
+  kind: string;
+  valueCents: number;
+  holdings: { ticker: string | null; valueCents: number; costBasisCents: number | null }[];
+  activity: { type: string; ticker: string | null; postedAt: Date | null }[];
+}
+
+/** Every position across accounts. An account with only a balance counts as one unnamed position. */
+export function positionsOf(accounts: AccountView[]): Position[] {
+  return accounts.flatMap((a) =>
+    a.holdings.length
+      ? a.holdings.map((h) => ({ ticker: h.ticker, accountKind: a.kind, valueCents: h.valueCents, costBasisCents: h.costBasisCents }))
+      : [{ ticker: null, accountKind: a.kind, valueCents: a.valueCents, costBasisCents: null }],
+  );
+}
+
+/** Buys inside the wash-sale window, across all accounts. */
+export function recentBuysOf(accounts: AccountView[], now: Date): RecentBuy[] {
+  const cutoff = now.getTime() - WASH_SALE_DAYS * DAY;
+  return accounts.flatMap((a) =>
+    a.activity.flatMap((t) =>
+      t.type === "buy" && t.ticker && t.postedAt && t.postedAt.getTime() >= cutoff
+        ? [{ ticker: t.ticker, date: t.postedAt.toISOString().slice(0, 10) }]
+        : [],
+    ),
+  );
+}
+
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : 0);
 const isCash = (ticker: string | null) => ticker?.startsWith("CUR:") ?? false;
 

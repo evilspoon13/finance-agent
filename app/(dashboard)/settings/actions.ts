@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createRule, deleteRule } from "@/lib/db/rules-queries";
 import { setContext, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
+import { PROFILE_KEY, profileSchema } from "@/lib/agent/profile";
 import { IGNORE_CATEGORY } from "@/lib/db/spend-sql";
 import { BUDGETABLE_CATEGORIES } from "@/lib/category";
 
@@ -46,4 +47,22 @@ export async function saveNotesAction(formData: FormData): Promise<void> {
   if (!notes.success) return;
   await setContext(NOTES_KEY, notes.data.trim());
   revalidatePath("/settings");
+}
+
+/** Save the structured profile. Invalid JSON or fields are refused, with the reason shown. */
+export async function saveProfileAction(_prev: string | null, formData: FormData): Promise<string | null> {
+  const raw = String(formData.get("profile") ?? "");
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return "That isn't valid JSON.";
+  }
+  const parsed = profileSchema.safeParse(json);
+  if (!parsed.success) {
+    return parsed.error.issues.map((i) => `${i.path.join(".") || "profile"}: ${i.message}`).join("; ");
+  }
+  await setContext(PROFILE_KEY, JSON.stringify(parsed.data, null, 2));
+  revalidatePath("/settings");
+  return null;
 }

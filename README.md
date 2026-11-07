@@ -37,6 +37,8 @@ Copy `.env.example` to `.env` and fill it in:
 | `CRON_SECRET`           | no       | Enables `POST /api/cron/sync` for a scheduled daily sync                  |
 | `AGENT_TOKEN`           | no       | Enables the finance agent's `/api/agent/*` endpoints (bearer token)       |
 | `DATABASE_URL_READONLY` | no       | Direct URL for a read-only role, used by the agent's query endpoint       |
+| `AGENT_RESEARCH_TOKEN`  | no       | Second token for web-facing research runs: research routes only           |
+| `FINNHUB_API_KEY`       | no       | Fundamentals, earnings and news for research. Prices work without it      |
 
 Keep `TOKEN_ENC_KEY` with your data: a database restored under a different key can't
 decrypt its Plaid tokens, and every institution would need re-linking.
@@ -102,13 +104,24 @@ from where the old database left off.
 
 ## Finance agent (optional)
 
-A Claude Code scheduled task can check in on your finances: your savings rate, where the
-money went, progress toward financial independence, idle cash and contribution pacing. It digs
-into anything unusual through a read-only SQL endpoint and saves a briefing with a link back to
-the conversation, where you can reply. It keeps notes and follow-ups between runs,
-so what you tell it sticks. Its instructions live in [`docs/agent.md`](docs/agent.md); briefings
-and follow-ups show up on the **Briefings** page, and your goals and its notes are edited in
-**Settings**.
+A Claude Code scheduled task can audit your spending, track your savings rate and progress toward
+financial independence, and research the market into one concrete investing proposal. It digs into
+anything unusual through a read-only SQL endpoint and saves briefings with a link back to the
+conversation, where you can reply.
+
+- **Knowledge:** it keeps long-term facts between runs, each with a source. Its guesses wait on the
+  **Knowledge** page until you confirm them, so a misreading can't become fact.
+- **Briefings:** reports, follow-ups, questions you can answer in place, research and proposals.
+- **Settings:** your goals, plus a JSON profile with the numbers the accounts can't show and the
+  limits on proposals. The app refuses any proposal that breaks those limits.
+
+Runs come in two kinds, kept apart on purpose. Web pages can carry hidden instructions, so the runs
+that read the web never see your finances:
+
+| Runs | Guide | Sees | Token |
+|---|---|---|---|
+| Daily, weekly, monthly | [`docs/agent.md`](docs/agent.md) | Your data, no web | `AGENT_TOKEN` |
+| Market pulse, deep research | [`docs/research.md`](docs/research.md) | The web, tickers only | `AGENT_RESEARCH_TOKEN` |
 
 1. Create a read-only Postgres role. The agent must not read Plaid tokens:
 

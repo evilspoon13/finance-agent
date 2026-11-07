@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { agentGuard } from "@/lib/agent/guard";
 import { SYMBOL_PATTERN } from "@/lib/agent/market";
-import { checkProposal, portfolioView, washSaleRisks } from "@/lib/agent/portfolio";
+import { checkProposal, portfolioView, positionsOf, recentBuysOf, washSaleRisks } from "@/lib/agent/portfolio";
 import { parseProfile, PROFILE_KEY } from "@/lib/agent/profile";
 import { getContext } from "@/lib/db/agent-queries";
 import { getInvestments } from "@/lib/db/analytics";
@@ -22,8 +22,6 @@ const bodySchema = z.object({
   reviewOn: z.iso.date().optional(),
 });
 
-const WASH_SALE_DAYS = 30;
-
 // POST /api/agent/proposals -> record one proposal. Refused with 422 when it breaks
 // the limits in the profile; prices are recorded here so it can be scored later.
 export async function POST(request: Request) {
@@ -38,15 +36,8 @@ export async function POST(request: Request) {
 
   const [raw, investments] = await Promise.all([getContext(PROFILE_KEY), getInvestments()]);
   const rules = parseProfile(raw).stocks;
-  const positions = investments.accounts.flatMap((a) =>
-    a.holdings.map((h) => ({ ticker: h.ticker, accountKind: a.kind, valueCents: h.valueCents, costBasisCents: h.costBasisCents })),
-  );
-  const cutoff = Date.now() - WASH_SALE_DAYS * 864e5;
-  const buys = investments.accounts.flatMap((a) =>
-    a.activity.flatMap((t) =>
-      t.type === "buy" && t.ticker && t.postedAt && t.postedAt.getTime() >= cutoff ? [{ ticker: t.ticker, date: "" }] : [],
-    ),
-  );
+  const positions = positionsOf(investments.accounts);
+  const buys = recentBuysOf(investments.accounts, new Date());
   const { errors, warnings } = checkProposal({ ...p, amountCents }, portfolioView(positions, rules), rules, washSaleRisks(positions, buys));
   if (errors.length) return NextResponse.json({ ok: false, errors, warnings }, { status: 422 });
 

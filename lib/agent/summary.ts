@@ -28,7 +28,7 @@ import {
   yearsToTarget,
 } from "./fire";
 import { CONTRIBUTION_LIMITS } from "./limits";
-import { portfolioView, scoreProposal, washSaleRisks, type Position } from "./portfolio";
+import { portfolioView, positionsOf, recentBuysOf, scoreProposal, washSaleRisks } from "./portfolio";
 import { parseProfile, PROFILE_KEY, type Profile } from "./profile";
 import { projectMonthEnd } from "./projection";
 import { median } from "./recurring";
@@ -43,7 +43,7 @@ const usd = (cents: number) => Math.round(cents) / 100;
 const DAY = 864e5;
 const STALE_SYNC_HOURS = 48;
 const PAY_LOOKBACK_DAYS = 130;
-const WASH_SALE_DAYS = 30;
+const RECENT_CHECKS = 3; // pay changes with deferrals, so a usual check means a recent one
 const RUN_RATE_MONTHS = 3;
 
 function grossRate(s: WindowSavings, checks: number, profile: Profile) {
@@ -188,7 +188,8 @@ export async function buildAgentSummary(now = new Date()) {
             eq(accounts.subtype, "401k"),
             gte(investmentTransactions.postedAt, new Date(now.getTime() - PAY_LOOKBACK_DAYS * DAY)),
           ),
-        ),
+        )
+        .orderBy(investmentTransactions.postedAt),
     ]);
 
   const profile = parseProfile(profileRaw);
@@ -267,10 +268,10 @@ export async function buildAgentSummary(now = new Date()) {
 
   const accountName = new Map(investments.accounts.map((a) => [a.accountId, a.name]));
 
-  // Run rates from recent full months with income data, leaving out the months
-  // the profile marks as unusual (and those before accounts were linked).
-  const excluded = new Set(profile.excludedMonths);
-  const observed = savingsMonths.filter((x) => x.s.incomeCents > 0 && !excluded.has(x.label)).slice(0, RUN_RATE_MONTHS);
+  // Run rates from recent full months with income data. Nothing from before the
+  // latest month the profile marks as unusual: life had changed by then.
+  const lastExcluded = [...profile.excludedMonths].sort().at(-1) ?? "";
+  const observed = savingsMonths.filter((x) => x.s.incomeCents > 0 && x.label > lastExcluded).slice(0, RUN_RATE_MONTHS);
   const avg = (f: (s: WindowSavings) => number) =>
     observed.length ? observed.reduce((t, x) => t + f(x.s), 0) / observed.length : 0;
   const monthlySpendCents = avg((s) => s.spentCents);
@@ -280,8 +281,8 @@ export async function buildAgentSummary(now = new Date()) {
 
   // A usual year, from the median paycheck so one-off pay doesn't skew it.
   const recentPay = deposits.filter((d) => d.date.getTime() >= now.getTime() - PAY_LOOKBACK_DAYS * DAY);
-  const netPerCheckCents = median(groupPaychecks(recentPay));
-  const retirementPerCheckCents = median(contributionRows.map((r) => -r.cents));
+  const netPerCheckCents = median(groupPaychecks(recentPay).slice(-RECENT_CHECKS));
+  const retirementPerCheckCents = median(contributionRows.map((r) => -r.cents).slice(-RECENT_CHECKS));
   const extrasCents = (profile.plannedAnnualRsuNetUsd + profile.plannedAnnualBonusNetUsd) * 100;
   const usualYear = normalizedYear({
     netPerCheckCents,
@@ -314,17 +315,8 @@ export async function buildAgentSummary(now = new Date()) {
       })
     : null;
 
-  const positions: Position[] = investments.accounts.flatMap((a) =>
-    a.holdings.map((h) => ({ ticker: h.ticker, accountKind: a.kind, valueCents: h.valueCents, costBasisCents: h.costBasisCents })),
-  );
-  const washCutoff = now.getTime() - WASH_SALE_DAYS * DAY;
-  const recentBuys = investments.accounts.flatMap((a) =>
-    a.activity.flatMap((t) =>
-      t.type === "buy" && t.ticker && t.postedAt && t.postedAt.getTime() >= washCutoff
-        ? [{ ticker: t.ticker, date: t.postedAt.toISOString().slice(0, 10) }]
-        : [],
-    ),
-  );
+  const positions = positionsOf(investments.accounts);
+  const recentBuys = recentBuysOf(investments.accounts, now);
   const portfolio = portfolioView(positions, profile.stocks);
 
   const benchmark = profile.stocks.benchmark;
