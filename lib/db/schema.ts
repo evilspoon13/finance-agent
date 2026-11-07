@@ -9,7 +9,10 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Drizzle schema for the personal finance aggregator.
@@ -219,7 +222,8 @@ export const categoryRules = pgTable("category_rules", {
  *  - "goals": the user's profile, goals and rules (user-edited, in Settings);
  *  - "notes": the agent's own running memory across runs (facts the user told
  *    it in a reply, decisions, things already explained). The agent rewrites it;
- *    the user can edit it in Settings too.
+ *    the user can edit it in Settings too;
+ *  - "profile": structured numbers and rules as JSON (lib/agent/profile.ts).
  * Kept in the DB so personal details never live in the repo.
  */
 export const agentContext = pgTable("agent_context", {
@@ -262,10 +266,127 @@ export const agentActions = pgTable(
     dueOn: date("due_on"),
     status: agentActionStatusEnum("status").notNull().default("open"),
     note: text("note"), // how it was resolved, or why it was dismissed
+    // "action" = something to do; "question" = something the agent needs to know.
+    // The user answers a question on /briefings; `answer` is their exact words.
+    kind: text("kind").notNull().default("action"),
+    answer: text("answer"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   },
   (t) => [index("agent_actions_status_idx").on(t.status)],
+);
+
+/**
+ * The agent's long-term knowledge: one fact per row, with where it came from.
+ * `source`: "user" = the user wrote or confirmed it in the app; "observed" = seen
+ * in the data; "reported" = the agent's paraphrase of a chat reply; "inferred" =
+ * the agent's guess. Reported and inferred rows wait in "pending_review" until the
+ * user confirms them, so a misreading can't become fact (see lib/agent/knowledge.ts).
+ * Rows are superseded rather than overwritten, so a slug keeps its history.
+ */
+export const agentKnowledge = pgTable(
+  "agent_knowledge",
+  {
+    id: text("id").primaryKey(),
+    slug: text("slug").notNull(),
+    topic: text("topic").notNull(),
+    body: text("body").notNull(),
+    source: text("source").notNull(), // user | observed | reported | inferred
+    status: text("status").notNull(), // active | pending_review | superseded | rejected
+    sessionUrl: text("session_url"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    expiresOn: date("expires_on"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("agent_knowledge_slug_idx").on(t.slug),
+    index("agent_knowledge_status_idx").on(t.status),
+    uniqueIndex("agent_knowledge_active_slug_idx").on(t.slug).where(sql`${t.status} = 'active'`),
+  ],
+);
+
+/** Numbers a run wants the next one to compare against, one row per kind and period. */
+export const agentScorecards = pgTable(
+  "agent_scorecards",
+  {
+    kind: text("kind").notNull(), // weekly | monthly
+    period: text("period").notNull(), // e.g. 2026-11-08, 2026-10
+    metrics: jsonb("metrics").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.period] })],
+);
+
+/**
+ * Market research written by the web-facing runs (docs/research.md). Those runs
+ * never see financial data, and everything here is web-derived: readers must
+ * treat it as untrusted text, not instructions.
+ */
+export const researchMemos = pgTable(
+  "research_memos",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind").notNull(), // pulse | weekly | deep_dive
+    title: text("title").notNull(),
+    body: text("body").notNull(), // markdown
+    sources: jsonb("sources").notNull().default([]), // [{title, url, date}]
+    sessionUrl: text("session_url"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("research_memos_created_idx").on(t.createdAt)],
+);
+
+/** The watchlist and thesis ledger: one row per ticker, kept across research runs. */
+export const investmentIdeas = pgTable("investment_ideas", {
+  ticker: text("ticker").primaryKey(),
+  name: text("name"),
+  status: text("status").notNull().default("researching"), // researching | watch | proposed | owned | rejected
+  thesis: text("thesis"),
+  bearCase: text("bear_case"),
+  valuation: text("valuation"),
+  invalidation: text("invalidation"), // what would prove the thesis wrong
+  nextReviewOn: date("next_review_on"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A concrete investing proposal, kept whether or not the user acts on it: entry
+ * prices are recorded so every proposal can be scored against the benchmark.
+ */
+export const investmentProposals = pgTable(
+  "investment_proposals",
+  {
+    id: text("id").primaryKey(),
+    ticker: text("ticker").notNull(),
+    action: text("action").notNull(), // buy | sell | hold
+    account: text("account").notNull(),
+    amountCents: integer("amount_cents").notNull(),
+    rationale: text("rationale").notNull(),
+    entryCondition: text("entry_condition"),
+    invalidation: text("invalidation"),
+    reviewOn: date("review_on"),
+    entryPriceCents: integer("entry_price_cents"),
+    benchmarkTicker: text("benchmark_ticker").notNull(),
+    benchmarkPriceCents: integer("benchmark_price_cents"),
+    status: text("status").notNull().default("proposed"), // proposed | accepted | declined
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+  },
+  (t) => [index("investment_proposals_created_idx").on(t.createdAt)],
+);
+
+/** One closing price per ticker per day, for held and watched tickers and the benchmark. */
+export const priceSnapshots = pgTable(
+  "price_snapshots",
+  {
+    ticker: text("ticker").notNull(),
+    day: date("day").notNull(),
+    closeCents: integer("close_cents").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.ticker, t.day] })],
 );
 
 export type Item = typeof items.$inferSelect;
@@ -287,3 +408,7 @@ export type NewBudget = typeof budgets.$inferInsert;
 export type CategoryRule = typeof categoryRules.$inferSelect;
 export type AgentBriefing = typeof agentBriefings.$inferSelect;
 export type AgentAction = typeof agentActions.$inferSelect;
+export type AgentKnowledge = typeof agentKnowledge.$inferSelect;
+export type ResearchMemo = typeof researchMemos.$inferSelect;
+export type InvestmentIdea = typeof investmentIdeas.$inferSelect;
+export type InvestmentProposal = typeof investmentProposals.$inferSelect;

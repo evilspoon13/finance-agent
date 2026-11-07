@@ -92,6 +92,13 @@
       "when": 1792899569597,
       "tag": "0012_agent_memory",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794027380618,
+      "tag": "0013_agent_v3",
+      "breakpoints": true
     }
   ]
 }

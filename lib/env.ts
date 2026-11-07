@@ -24,6 +24,10 @@ const coreSchema = z.object({
   // Scheduled finance agent (see docs/agent.md). Each is optional; the agent
   // endpoints answer 503 until AGENT_TOKEN and DATABASE_URL_READONLY are set.
   AGENT_TOKEN: z.string().min(32).optional().or(z.literal("")),
+  // Second token for web-facing research runs: research routes only (lib/agent/guard.ts).
+  AGENT_RESEARCH_TOKEN: z.string().min(32).optional().or(z.literal("")),
+  // Fundamentals, earnings and news for the agent. Prices work without it.
+  FINNHUB_API_KEY: z.string().optional(),
   DATABASE_URL_READONLY: z.string().optional(),
 });
 

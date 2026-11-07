@@ -7,9 +7,11 @@ const bodySchema = z.object({
   title: z.string().trim().min(1).max(200),
   detail: z.string().trim().max(2_000).optional(),
   dueOn: z.iso.date().optional(),
+  kind: z.enum(["action", "question"]).default("action"),
 });
 
-// POST /api/agent/actions {title, detail?, dueOn?} -> open a follow-up for the user.
+// POST /api/agent/actions {title, detail?, dueOn?, kind?} -> open a follow-up, or ask the
+// user a question they can answer on /briefings.
 export async function POST(request: Request) {
   const denied = agentGuard(request);
   if (denied) return denied;
