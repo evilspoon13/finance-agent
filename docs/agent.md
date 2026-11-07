@@ -24,6 +24,7 @@ All calls go to the deployed app over HTTPS. `$APP_URL` is its base URL (e.g.
 curl -s "$APP_URL/api/agent/summary" > /tmp/summary.json
 
 # 2. Dig in: one read-only SELECT/WITH query, max 500 rows, 5s timeout.
+#    GET /api/agent/schema lists every table and column; check it before writing SQL.
 jq -nc --arg sql "select merchant_name, sum(amount_cents)/100.0 as usd
   from transactions where posted_at > now() - interval '30 days'
   group by 1 order by 2 desc limit 20" '{sql: $sql}' |
@@ -41,14 +42,19 @@ jq -nc '{status: "done", note: "Election changed (user, Dec 3)"}' |
 
 # 5. Report: save exactly one briefing per run. notify=true marks it as needing the user.
 SESSION_URL="https://claude.ai/code/${CLAUDE_CODE_REMOTE_SESSION_ID/#cse_/session_}"
-jq -nc --arg title "..." --rawfile body /tmp/briefing.md --arg url "$SESSION_URL" \
+cat > /tmp/title.txt <<'EOF'
+Verdict with amounts, like $1,200 by Nov 4
+EOF
+jq -nc --rawfile title /tmp/title.txt --rawfile body /tmp/briefing.md --arg url "$SESSION_URL" \
   '{kind: "daily", title: $title, body: $body, notify: false, sessionUrl: $url}' |
   curl -s -X POST -H "content-type: application/json" -d @- "$APP_URL/api/agent/briefings"
 ```
 
 `kind` is `daily`, `weekly`, `monthly` or `adhoc`. `/query` returns
 `{ok:true, columns, rows, rowCount, truncated}` or `{ok:false, error}`; on an error, fix the
-SQL and retry. Always build JSON bodies with `jq`, not by hand-escaping. Pass `sessionUrl`
+SQL and retry. Always build JSON bodies with `jq`, not by hand-escaping. **Any text with a
+dollar sign goes through a quoted heredoc (`<<'EOF'`) and `--rawfile`, titles included:** inside
+double quotes the shell expands `$1,200` to `,200`. Pass `sessionUrl`
 (built from `CLAUDE_CODE_REMOTE_SESSION_ID` as above; omit it when that variable is unset)
 so the briefing links back to this conversation: the user opens it from the app's Briefings
 page and replies there.

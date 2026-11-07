@@ -24,6 +24,27 @@ export async function listBriefings(limit = 50): Promise<AgentBriefing[]> {
   return db.select().from(agentBriefings).orderBy(desc(agentBriefings.createdAt)).limit(limit);
 }
 
+/** Merge the newest briefings with the latest of each kind, newest first, without repeats. */
+export function mergeBriefings(recent: AgentBriefing[], latestPerKind: AgentBriefing[]): AgentBriefing[] {
+  const byId = new Map([...recent, ...latestPerKind].map((b) => [b.id, b]));
+  return [...byId.values()].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+}
+
+/**
+ * What a run sees of its own history: the last few briefings plus the latest of
+ * each kind, so daily runs can't push last week's weekly out of view.
+ */
+export async function briefingsForAgent(limit = 5): Promise<AgentBriefing[]> {
+  const [recent, latestPerKind] = await Promise.all([
+    listBriefings(limit),
+    db
+      .selectDistinctOn([agentBriefings.kind])
+      .from(agentBriefings)
+      .orderBy(agentBriefings.kind, desc(agentBriefings.createdAt)),
+  ]);
+  return mergeBriefings(recent, latestPerKind);
+}
+
 export async function createBriefing(input: {
   kind: string;
   title: string;

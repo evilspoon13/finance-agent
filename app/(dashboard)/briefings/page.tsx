@@ -1,3 +1,4 @@
+import { Markdown } from "@/components/Markdown";
 import { PageShell } from "@/components/PageShell";
 import { listActions, listBriefings } from "@/lib/db/agent-queries";
 import type { AgentAction } from "@/lib/db/schema";
@@ -65,7 +66,7 @@ export default async function BriefingsPage() {
                   </span>
                 </summary>
                 <div className="border-t border-zinc-100 px-4 py-4 dark:border-zinc-800">
-                  <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{b.body}</div>
+                  <Markdown>{b.body}</Markdown>
                   {b.sessionUrl ? (
                     <a href={b.sessionUrl} className="mt-3 inline-block text-sm font-medium hover:underline">
                       Continue in Claude →

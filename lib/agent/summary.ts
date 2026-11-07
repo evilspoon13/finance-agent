@@ -6,7 +6,7 @@ import { getNetWorthHistory } from "@/lib/db/net-worth-history";
 import { budgetProgress } from "@/lib/db/budget-queries";
 import { effectiveCategory, spendRowPredicate } from "@/lib/db/spend-sql";
 import { analyzeRewards } from "@/lib/rewards/compute";
-import { getContext, listActions, listBriefings, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
+import { briefingsForAgent, getContext, listActions, GOALS_KEY, NOTES_KEY } from "@/lib/db/agent-queries";
 import { savingsForWindow, type WindowSavings } from "./savings";
 import { FI_MULTIPLE, REAL_RETURN, yearsToTarget } from "./fire";
 import { CONTRIBUTION_LIMITS } from "./limits";
@@ -96,7 +96,7 @@ export async function buildAgentSummary(now = new Date()) {
       getContext(GOALS_KEY),
       getContext(NOTES_KEY),
       listActions(),
-      listBriefings(5),
+      briefingsForAgent(),
       savingsForWindow({ from: monthStart, to: now }),
       savingsForWindow({ from: yearStart, to: now }),
       Promise.all(fullMonths.map(async (w) => ({ label: w.label, s: await savingsForWindow(w) }))),
